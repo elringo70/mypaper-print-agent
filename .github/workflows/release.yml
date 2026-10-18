@@ -1,0 +1,70 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Tests + lints
+        run: |
+          cargo test --workspace --locked
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Release binaries
+        run: cargo build --release --locked -p mpa-cli -p mpa-ui
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Package installer
+        shell: pwsh
+        run: |
+          $version = '${{ github.ref_name }}'.TrimStart('v')
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" packaging\mpa.iss
+
+      - name: Sign installer
+        shell: pwsh
+        env:
+          MPA_MINISIGN_KEY: ${{ secrets.MPA_MINISIGN_KEY }}
+        run: |
+          $version = '${{ github.ref_name }}'.TrimStart('v')
+          $setup = "Output\mpa-$version-setup.exe"
+          cargo install rsign2 --locked
+          # Write the secret to a temp file (removed right after signing).
+          $keyFile = "$env:RUNNER_TEMP\minisign.key"
+          $env:MPA_MINISIGN_KEY | Out-File $keyFile -Encoding utf8 -NoNewline
+          & "$env:USERPROFILE\.cargo\bin\rsign" sign $setup -s $keyFile -x "$setup.minisig" -W
+          Remove-Item $keyFile -Force
+
+      - name: Build manifest
+        shell: pwsh
+        run: |
+          $version = '${{ github.ref_name }}'.TrimStart('v')
+          $setup = "Output\mpa-$version-setup.exe"
+          $hash = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLower()
+          $sig = Get-Content "$setup.minisig" -Raw
+          @{ version = $version
+             url = "https://github.com/${{ github.repository }}/releases/download/v$version/mpa-$version-setup.exe"
+             sha256 = $hash
+             signature = $sig
+             notes = $null } | ConvertTo-Json | Out-File Output\latest.json -Encoding utf8
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            Output/mpa-*-setup.exe
+            Output/mpa-*-setup.exe.minisig
+            Output/latest.json

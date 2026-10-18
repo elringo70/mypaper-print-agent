@@ -1,0 +1,19 @@
+[package]
+name = "mpa-sync"
+version = "0.2.0"
+edition = "2021"
+
+[dependencies]
+mpa-domain = { path = "../domain" }
+mpa-agent = { path = "../agent" }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls-manual-roots"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[dev-dependencies]
+mpa-analyzer = { path = "../analyzer" }
+mpa-spool = { path = "../spool" }
+
+[lints]
+workspace = true

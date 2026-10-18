@@ -1,0 +1,49 @@
+[package]
+name = "mpa-ui"
+version = "0.2.0"
+edition = "2021"
+
+[[bin]]
+name = "mpa-ui"
+path = "src/main.rs"
+
+[dependencies]
+thiserror = "2"
+mpa-domain = { path = "../domain" }
+mpa-spool = { path = "../spool" }
+mpa-agent = { path = "../agent" }
+mpa-sync = { path = "../sync" }
+mpa-update = { path = "../update" }
+# `windows-manifest` (on by default) is turned off so gpui stops embedding its
+# own RT_MANIFEST: the binary needs OUR manifest (requestedExecutionLevel =
+# requireAdministrator) and link.exe refuses two (CVT1100 duplicate resource).
+# The rest of gpui's defaults are spelled out here on purpose.
+gpui = { version = "0.2", default-features = false, features = [
+    "font-kit",
+    "wayland",
+    "x11",
+] }
+
+[build-dependencies]
+embed-resource = "3"
+
+# System tray is Windows-only: the Linux backends (libappindicator/ksni)
+# need system GTK dev libraries, and the tray is a Windows-deliverable.
+# Other platforms compile a no-op stub (same API, `build` always errs).
+[target.'cfg(windows)'.dependencies]
+tray-icon = "0.26"
+muda = "0.21"
+
+[dev-dependencies]
+# Same feature set as the dependency above, minus `windows-manifest`: with the
+# defaults on, `cargo test` links gpui's manifest AND ours into the same test
+# binary and link.exe dies with CVT1100 (duplicate MANIFEST resource).
+gpui = { version = "0.2", default-features = false, features = [
+    "test-support",
+    "font-kit",
+    "wayland",
+    "x11",
+] }
+
+[lints]
+workspace = true

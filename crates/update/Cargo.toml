@@ -1,0 +1,17 @@
+[package]
+name = "mpa-update"
+version = "0.2.0"
+edition = "2021"
+
+[dependencies]
+mpa-domain = { path = "../domain" }
+mpa-sync = { path = "../sync" }
+minisign-verify = "0.3"
+semver = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+
+[lints]
+workspace = true

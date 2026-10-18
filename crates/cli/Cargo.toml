@@ -1,0 +1,24 @@
+[package]
+name = "mpa-cli"
+version = "0.2.0"
+edition = "2021"
+
+[[bin]]
+name = "mpa"
+path = "src/main.rs"
+
+[dependencies]
+mpa-domain = { path = "../domain" }
+mpa-spool = { path = "../spool" }
+mpa-analyzer = { path = "../analyzer" }
+mpa-agent = { path = "../agent" }
+mpa-sync = { path = "../sync" }
+mpa-update = { path = "../update" }
+clap = { version = "4", features = ["derive"] }
+thiserror = "2"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+
+[lints]
+workspace = true

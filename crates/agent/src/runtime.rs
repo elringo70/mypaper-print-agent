@@ -1,0 +1,208 @@
+use crate::core::{analyze_spool, detect, AgentCore, PauseOutcome, TargetSelection, WatchedJob};
+use mpa_domain::PrinterPolicy;
+use mpa_spool::SpoolBackend;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
+use std::thread::JoinHandle;
+use std::time::Duration;
+
+/// Background supervisor: one watcher thread per watched printer.
+/// Threads only touch the core behind its mutex — never GPUI state.
+/// The UI polls `AgentCore::version` and mirrors snapshots.
+pub struct AgentRuntime {
+    core: Arc<Mutex<AgentCore>>,
+    stop: Arc<AtomicBool>,
+    threads: Vec<JoinHandle<()>>,
+}
+
+impl std::fmt::Debug for AgentRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentRuntime")
+            .field("threads", &self.threads.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl AgentRuntime {
+    pub fn start(core: Arc<Mutex<AgentCore>>, policy: PrinterPolicy, quantum: Duration) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let printers: Vec<String> = {
+            let core = core.lock().expect("agent core");
+            core.watched_printers(&policy)
+        };
+        let mut threads = Vec::new();
+        for printer in printers {
+            let core = Arc::clone(&core);
+            let stop = Arc::clone(&stop);
+            threads.push(std::thread::spawn(move || {
+                watch_printer(core, printer, quantum, stop)
+            }));
+        }
+        Self {
+            core,
+            stop,
+            threads,
+        }
+    }
+
+    pub fn core(&self) -> Arc<Mutex<AgentCore>> {
+        Arc::clone(&self.core)
+    }
+
+    pub fn shutdown(self) {
+        self.stop.store(true, Ordering::Relaxed);
+        for t in self.threads {
+            let _ = t.join();
+        }
+    }
+}
+
+fn watch_printer(
+    core: Arc<Mutex<AgentCore>>,
+    printer: String,
+    quantum: Duration,
+    stop: Arc<AtomicBool>,
+) {
+    // Spooler handle OUTSIDE the core lock: `wait_for_new_job` blocks up to
+    // `quantum`, and the UI thread must keep getting the lock every 500 ms.
+    // Holding the guard across that wait freezes the window long enough for
+    // Windows to flag the app as "Not Responding".
+    let backend = core
+        .lock()
+        .map(|c| c.backend())
+        .unwrap_or_else(|_| mpa_spool::default_backend().into());
+    let mut seen = std::collections::HashSet::new();
+    // Re-adopt what this agent (or a previous run of it) already holds, before
+    // the arrival loop: `wait_for_new_job` only fires on ADD_JOB/SET_JOB, so a
+    // job paused by an earlier process is never reported again.
+    recover_held_jobs(&core, backend.as_ref(), &printer, &mut seen);
+    while !stop.load(Ordering::Relaxed) {
+        let active = core.lock().map(|c| c.is_active()).unwrap_or(false);
+        if !active {
+            std::thread::sleep(quantum);
+            continue;
+        }
+        // Settle one pending subset reprint per cycle (unlocked Ghostscript).
+        match crate::reprint::sweep_one_reprint(&core) {
+            crate::reprint::SweepOutcome::Reprinted { key } => {
+                crate::log::info(format!("reprint {key}: subset sent"));
+            }
+            crate::reprint::SweepOutcome::Failed { key, error } => {
+                crate::log::warn(format!("reprint {key}: still pending ({error})"));
+            }
+            crate::reprint::SweepOutcome::Idle => {}
+        }
+        let arrival = match backend.wait_for_new_job(&printer, quantum) {
+            Ok(arrival) => arrival,
+            Err(e) => {
+                crate::log::warn(format!("watch {printer}: {e}"));
+                std::thread::sleep(quantum);
+                continue;
+            }
+        };
+        let Some(job_id) = arrival else { continue };
+        if !seen.insert(job_id) {
+            continue;
+        }
+        hold_and_analyze(&core, backend.as_ref(), &printer, job_id);
+    }
+}
+
+/// Re-adopt the jobs this agent left on hold.
+///
+/// A job the agent paused stays paused in the spooler across restarts, but the
+/// spooler only reports ADD_JOB/SET_JOB notifications, so nothing surfaces it
+/// again: the window opens with an empty queue while the printer stays blocked
+/// and the operator has no way to release the job from the app.
+fn recover_held_jobs(
+    core: &Arc<Mutex<AgentCore>>,
+    backend: &dyn SpoolBackend,
+    printer: &str,
+    seen: &mut std::collections::HashSet<u32>,
+) {
+    let jobs = match backend.list_jobs(printer) {
+        Ok(jobs) => jobs,
+        Err(e) => {
+            crate::log::warn(format!("recover {printer}: {e}"));
+            return;
+        }
+    };
+    for job in jobs.iter().filter(|j| j.status_text == "PAUSED") {
+        if !seen.insert(job.id) {
+            continue;
+        }
+        crate::log::info(format!(
+            "recover {printer} job {}: held before this run",
+            job.id
+        ));
+        // Record it first so the window shows the held job immediately; the
+        // analysis below fills in pages a few seconds later.
+        if let Ok(mut c) = core.lock() {
+            c.adopt_job(WatchedJob {
+                printer: printer.into(),
+                job_id: job.id,
+                document: job.document.clone(),
+                state: mpa_domain::JobState::Paused,
+                pages: Vec::new(),
+                analysis_error: None,
+                warnings: vec!["recuperado de una ejecución anterior".into()],
+                target: TargetSelection::Unassigned,
+                format: None,
+                spool_path: None,
+            });
+        }
+        hold_and_analyze(core, backend, printer, job.id);
+    }
+}
+
+/// Pause (idempotent for an already-held job) and analyze one job.
+///
+/// Both halves run WITHOUT the core lock: they touch the spooler and/or
+/// Ghostscript for seconds and MUST stay off it, because the UI thread polls
+/// that lock every 500 ms and a guard held across this work is what froze the
+/// window ("Not Responding"). Same discipline as `reprint::sweep_one_reprint`
+/// and `sync::drain_outbox`.
+fn hold_and_analyze(
+    core: &Arc<Mutex<AgentCore>>,
+    backend: &dyn SpoolBackend,
+    printer: &str,
+    job_id: u32,
+) {
+    let pause = match detect(backend, printer, job_id) {
+        Ok(detected) => core
+            .lock()
+            .map(|mut c| c.record_detected(printer, job_id, detected))
+            .unwrap_or(PauseOutcome::Missed),
+        Err(e) => {
+            crate::log::warn(format!("pause {printer} job {job_id}: {e}"));
+            return;
+        }
+    };
+    match pause {
+        PauseOutcome::Missed => return,
+        PauseOutcome::Escaped => {
+            crate::log::warn(format!(
+                "hold {printer} job {job_id}: paused late, pages may have escaped"
+            ));
+        }
+        PauseOutcome::Paused => {}
+    }
+    // Analysis runs here, unlocked (background thread, never the UI thread);
+    // the guard is taken back only to record the outcome.
+    let version = core.lock().map(|c| c.version()).unwrap_or_default();
+    let analysis = analyze_spool(backend, printer, job_id, version);
+    match core.lock() {
+        Ok(mut c) => {
+            if let Err(e) = c.record_analysis(printer, job_id, analysis) {
+                crate::log::warn(format!("analyze {printer} job {job_id}: {e}"));
+            }
+        }
+        Err(_) => {
+            crate::log::error(format!(
+                "analyze {printer} job {job_id}: core lock poisoned"
+            ));
+        }
+    }
+}

@@ -1,0 +1,15 @@
+[package]
+name = "mpa-spool"
+version = "0.2.0"
+edition = "2021"
+
+[dependencies]
+mpa-domain = { path = "../domain" }
+thiserror = "2"
+
+[target.'cfg(windows)'.dependencies]
+# Win32_Graphics_Gdi + Win32_Security are required for PRINTER_INFO_2W.
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Printing", "Win32_System_Threading", "Win32_Graphics_Gdi", "Win32_Security"] }
+
+[lints]
+workspace = true

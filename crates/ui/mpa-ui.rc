@@ -1,0 +1,3 @@
+// Resource script for mpa-ui.exe: RT_MANIFEST (24) id 1.
+// Compiled by build.rs via embed-resource (Windows targets only).
+1 24 "mpa-ui.manifest"
