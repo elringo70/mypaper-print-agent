@@ -1,4 +1,4 @@
-use super::{JobInfo, PrinterInfo, SpoolBackend, SpoolError};
+use super::{JobInfo, JobSettings, PrinterCaps, PrinterInfo, SpoolBackend, SpoolError};
 use std::time::Duration;
 use windows::core::{Error as WindowsError, HRESULT, HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{E_ACCESSDENIED, WAIT_OBJECT_0};
@@ -10,7 +10,7 @@ use windows::Win32::System::Threading::WaitForSingleObject;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WindowsSpool;
 
-struct PrinterHandle(PRINTER_HANDLE);
+pub(crate) struct PrinterHandle(pub(crate) PRINTER_HANDLE);
 
 impl Drop for PrinterHandle {
     fn drop(&mut self) {
@@ -40,7 +40,28 @@ fn map_error(e: WindowsError, context: &str) -> SpoolError {
     }
 }
 
-fn open_printer(name: &str) -> Result<PrinterHandle, SpoolError> {
+/// Open the printer asking for `PRINTER_ACCESS_ADMINISTER`, which is what
+/// `SetJob` level 2 needs to replace a job's information (its DEVMODE). Without
+/// it the spooler answers Win32 error 5 (access denied).
+pub(crate) fn open_printer_admin(name: &str) -> Result<PrinterHandle, SpoolError> {
+    let hname = HSTRING::from(name);
+    let mut handle = PRINTER_HANDLE::default();
+    let defaults = PRINTER_DEFAULTSW {
+        pDatatype: PWSTR::null(),
+        pDevMode: std::ptr::null_mut(),
+        DesiredAccess: PRINTER_ACCESS_ADMINISTER,
+    };
+    // SAFETY: `hname` outlives the call; `handle` is a valid out pointer and
+    // `defaults` lives for the duration of the call.
+    unsafe { OpenPrinterW(&hname, &mut handle, Some(&defaults)) }
+        .map_err(|e| map_error(e, &format!("open printer {name} for administration")))?;
+    if handle.Value.is_null() {
+        return Err(SpoolError::PrinterNotFound(name.into()));
+    }
+    Ok(PrinterHandle(handle))
+}
+
+pub(crate) fn open_printer(name: &str) -> Result<PrinterHandle, SpoolError> {
     let hname = HSTRING::from(name);
     let mut handle = PRINTER_HANDLE::default();
     // SAFETY: `hname` outlives the call; `handle` is a valid out pointer.
@@ -194,6 +215,23 @@ impl SpoolBackend for WindowsSpool {
     fn list_jobs(&self, printer: &str) -> Result<Vec<JobInfo>, SpoolError> {
         let handle = open_printer(printer)?;
         enum_jobs(handle.0)
+    }
+
+    fn printer_caps(&self, printer: &str) -> Result<PrinterCaps, SpoolError> {
+        super::devmode::caps(printer)
+    }
+
+    fn job_settings(&self, printer: &str, job_id: u32) -> Result<JobSettings, SpoolError> {
+        super::devmode::read(printer, job_id)
+    }
+
+    fn apply_job_settings(
+        &self,
+        printer: &str,
+        job_id: u32,
+        settings: &JobSettings,
+    ) -> Result<JobSettings, SpoolError> {
+        super::devmode::apply(printer, job_id, settings)
     }
 
     fn is_network_printer(&self, printer: &str) -> Result<bool, SpoolError> {

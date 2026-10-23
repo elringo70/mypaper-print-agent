@@ -1,4 +1,7 @@
-use mpa_domain::{PolicyMode, PrinterPolicy, Tier};
+use mpa_domain::{
+    MetricsByMode, PolicyMode, PrintMetric, PrintMode, PrintPreset, PrinterPolicy, PrinterRoles,
+    Tier,
+};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use thiserror::Error;
@@ -27,10 +30,56 @@ enum Mode {
 struct TierEntry {
     #[serde(default)]
     id: String,
+    /// Missing in configs written before Fase 1: those were color rule sets.
+    #[serde(default = "default_tier_mode")]
+    mode: PrintMode,
     #[serde(default)]
     min: f32,
     #[serde(default)]
     max: f32,
+}
+
+fn default_tier_mode() -> PrintMode {
+    PrintMode::Color
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MetricsFile {
+    #[serde(default)]
+    bw: PrintMetric,
+    #[serde(default = "default_color_metric")]
+    color: PrintMetric,
+}
+
+impl Default for MetricsFile {
+    fn default() -> Self {
+        Self {
+            bw: PrintMetric::KOnly,
+            color: PrintMetric::SumCmyk,
+        }
+    }
+}
+
+fn default_color_metric() -> PrintMetric {
+    PrintMetric::SumCmyk
+}
+
+impl From<MetricsFile> for MetricsByMode {
+    fn from(value: MetricsFile) -> Self {
+        Self {
+            bw: value.bw,
+            color: value.color,
+        }
+    }
+}
+
+impl From<&MetricsByMode> for MetricsFile {
+    fn from(value: &MetricsByMode) -> Self {
+        Self {
+            bw: value.bw,
+            color: value.color,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -43,6 +92,15 @@ struct FileConfig {
     ignored: Vec<String>,
     #[serde(default)]
     tiers: Vec<TierEntry>,
+    /// Billing metric per mode, synced with the tabulador.
+    #[serde(default)]
+    metrics: MetricsFile,
+    /// Mono / color printer roles (see `PrinterRoles`).
+    #[serde(default)]
+    printers: PrinterRoles,
+    /// Named print options the operator picks at print time (Fase 4).
+    #[serde(default)]
+    presets: Vec<PrintPreset>,
 }
 
 /// `%APPDATA%/mypaper-print-agent/config.toml` on Windows,
@@ -115,6 +173,7 @@ pub fn save_tiers(tiers: &[Tier], path: &PathBuf) -> Result<(), ConfigError> {
         .iter()
         .map(|t| TierEntry {
             id: t.id.clone(),
+            mode: t.mode,
             min: t.min_coverage,
             max: t.max_coverage,
         })
@@ -126,7 +185,80 @@ pub fn save_tiers(tiers: &[Tier], path: &PathBuf) -> Result<(), ConfigError> {
     Ok(())
 }
 
-/// Tiers synced from MyPaper in Phase 4; until then, optional local `[[tiers]]`.
+/// Persist the printer roles (mono / color) into `config.toml`.
+pub fn save_roles(roles: &PrinterRoles, path: &PathBuf) -> Result<(), ConfigError> {
+    let mut file = if path.exists() {
+        toml::from_str::<FileConfig>(&std::fs::read_to_string(path)?).unwrap_or_default()
+    } else {
+        FileConfig::default()
+    };
+    file.printers = roles.clone();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, toml::to_string_pretty(&file)?)?;
+    Ok(())
+}
+
+/// Printer roles from `config.toml`; missing block = nothing assigned yet.
+pub fn load_roles(path: &std::path::Path) -> PrinterRoles {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| toml::from_str::<FileConfig>(&text).ok())
+        .map(|file| file.printers)
+        .unwrap_or_default()
+}
+
+/// Persist the print presets (Fase 4) into `config.toml`.
+pub fn save_presets(presets: &[PrintPreset], path: &PathBuf) -> Result<(), ConfigError> {
+    let mut file = if path.exists() {
+        toml::from_str::<FileConfig>(&std::fs::read_to_string(path)?).unwrap_or_default()
+    } else {
+        FileConfig::default()
+    };
+    file.presets = presets.to_vec();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, toml::to_string_pretty(&file)?)?;
+    Ok(())
+}
+
+/// Print presets from `config.toml`; missing block = none configured.
+pub fn load_presets(path: &std::path::Path) -> Vec<PrintPreset> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| toml::from_str::<FileConfig>(&text).ok())
+        .map(|file| file.presets)
+        .unwrap_or_default()
+}
+
+/// Persist the billing metrics alongside the tabulador.
+pub fn save_metrics(metrics: &MetricsByMode, path: &PathBuf) -> Result<(), ConfigError> {
+    let mut file = if path.exists() {
+        toml::from_str::<FileConfig>(&std::fs::read_to_string(path)?).unwrap_or_default()
+    } else {
+        FileConfig::default()
+    };
+    file.metrics = MetricsFile::from(metrics);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, toml::to_string_pretty(&file)?)?;
+    Ok(())
+}
+
+/// Billing metrics from `config.toml`; missing block = per-mode defaults.
+pub fn load_metrics(path: &std::path::Path) -> MetricsByMode {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| toml::from_str::<FileConfig>(&text).ok())
+        .map(|file| MetricsByMode::from(file.metrics))
+        .unwrap_or_default()
+}
+
+/// Tiers synced from MyPaper; until the first sync, a local fallback with one
+/// rule set per mode so both printer roles can always classify a page.
 pub fn load_tiers(path: &std::path::Path) -> Vec<Tier> {
     let file: FileConfig = std::fs::read_to_string(path)
         .ok()
@@ -138,6 +270,7 @@ pub fn load_tiers(path: &std::path::Path) -> Vec<Tier> {
         .filter(|t| !t.id.is_empty() && t.min <= t.max)
         .map(|t| Tier {
             id: t.id,
+            mode: t.mode,
             min_coverage: t.min,
             max_coverage: t.max,
             active: true,
@@ -146,20 +279,16 @@ pub fn load_tiers(path: &std::path::Path) -> Vec<Tier> {
     if tiers.is_empty() {
         vec![
             Tier {
-                id: "BN".into(),
+                id: "BW".into(),
+                mode: PrintMode::Bw,
                 min_coverage: 0.0,
-                max_coverage: 5.0,
+                max_coverage: 100.0,
                 active: true,
             },
             Tier {
-                id: "COLOR50".into(),
-                min_coverage: 5.01,
-                max_coverage: 60.0,
-                active: true,
-            },
-            Tier {
-                id: "FOTO".into(),
-                min_coverage: 60.01,
+                id: "COLOR".into(),
+                mode: PrintMode::Color,
+                min_coverage: 0.01,
                 max_coverage: 100.0,
                 active: true,
             },

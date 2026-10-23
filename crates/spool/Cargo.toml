@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 mpa-domain = { path = "../domain" }
+serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 
 [target.'cfg(windows)'.dependencies]

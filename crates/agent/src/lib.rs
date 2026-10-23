@@ -8,7 +8,10 @@ pub mod runtime;
 pub mod tickets;
 
 pub use audit::{default_audit_path, tail_lines};
-pub use config::{config_path, load_policy, load_tiers, save_policy, save_tiers, ConfigError};
+pub use config::{
+    config_path, load_metrics, load_policy, load_presets, load_roles, load_tiers, save_metrics,
+    save_policy, save_presets, save_roles, save_tiers, ConfigError,
+};
 pub use core::{
     analyze_spool, detect, AgentCore, AgentError, AgentMode, AnalysisFailure, AnalyzedPage,
     AnalyzedSpool, Completion, Detected, OutboxEntry, OutboxPage, PauseOutcome, TargetSelection,

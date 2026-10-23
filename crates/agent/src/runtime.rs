@@ -1,5 +1,5 @@
 use crate::core::{analyze_spool, detect, AgentCore, PauseOutcome, TargetSelection, WatchedJob};
-use mpa_domain::PrinterPolicy;
+use mpa_domain::{PrintMode, PrinterPolicy};
 use mpa_spool::SpoolBackend;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -151,6 +151,8 @@ fn recover_held_jobs(
                 target: TargetSelection::Unassigned,
                 format: None,
                 spool_path: None,
+                print_mode: PrintMode::Bw,
+                preset: None,
             });
         }
         hold_and_analyze(core, backend, printer, job.id);

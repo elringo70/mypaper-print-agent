@@ -96,10 +96,14 @@ pub fn deliver_pdf(pdf: &[u8], entry: &OutboxEntry) -> Result<(), ReprintError> 
         let dir = spool_cache_dir();
         let file = dir.join(format!("{}-reprint.pdf", entry.idempotency_key));
         std::fs::write(&file, pdf)?;
-        let result = print_pdf_to_winprinter(&file, &entry.printer, &gs)
+        // Deliver to the role's printer when one is assigned (Fase 3), else to
+        // the printer that received the original job. Print options (Fase 4)
+        // travel with the entry so a queued job keeps its settings.
+        let target = entry.deliver_printer.as_deref().unwrap_or(&entry.printer);
+        let result = print_pdf_to_winprinter(&file, target, &gs, entry.options.as_ref())
             .map_err(|e| ReprintError::Print(e.to_string()));
         let _ = std::fs::remove_file(&file);
-        return result;
+        result
     }
 
     #[cfg(not(windows))]
@@ -171,6 +175,10 @@ mod tests {
             pages: vec![],
             format: Some(SpoolFormat::Pdf),
             spool_path: None,
+            mode: mpa_domain::PrintMode::Bw,
+            deliver_printer: None,
+            options: None,
+            applied_settings: None,
             reprint_pending: true,
             synced: false,
             remote_id: None,

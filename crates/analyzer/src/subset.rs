@@ -102,15 +102,22 @@ pub fn print_pdf_to_winprinter(
     pdf_path: &Path,
     printer: &str,
     gs: &Ghostscript,
+    options: Option<&mpa_domain::PrintOptions>,
 ) -> Result<(), GsError> {
-    let status = Command::new(gs.program())
-        .args([
-            "-dBATCH",
-            "-dNOPAUSE",
-            "-dQUIET",
-            "-sDEVICE=mswinpr2",
-            &format!("-sOutputFile=%printer%{printer}"),
-        ])
+    let mut command = Command::new(gs.program());
+    command.args([
+        "-dBATCH",
+        "-dNOPAUSE",
+        "-dQUIET",
+        "-sDEVICE=mswinpr2",
+        &format!("-sOutputFile=%printer%{printer}"),
+    ]);
+    // Paper size / duplex: the only print characteristics mswinpr2 honours
+    // (resolution and media type are not settable through this device).
+    if let Some(options) = options {
+        command.args(options.gs_args());
+    }
+    let status = command
         .arg(pdf_path)
         .status()
         .map_err(|e| GsError::Failed(format!("spawn: {e}")))?;

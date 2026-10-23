@@ -1,10 +1,14 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use mpa_agent::{
-    default_state_path, load_into, load_policy, load_tiers, save_policy, save_to, AgentCore,
-    ConfigError, MockTickets, OutboxEntry, OutboxPage, TargetSelection,
+    config_path, default_state_path, load_into, load_metrics, load_policy, load_presets,
+    load_roles, load_tiers, save_metrics, save_policy, save_presets, save_roles, save_tiers,
+    save_to, AgentCore, ConfigError, MockTickets, OutboxEntry, OutboxPage, TargetSelection,
 };
 use mpa_analyzer::{analyze_file, capture_spool_file, Ghostscript};
-use mpa_domain::{classify_coverage, transition, Coverage, JobEvent, JobState, PolicyMode, Tier};
+use mpa_domain::{
+    classify_coverage, has_color_ink, metric_coverage, transition, Coverage, JobEvent, JobState,
+    PolicyMode, PrintMode, Tier,
+};
 use mpa_spool::{default_backend, SpoolBackend, SpoolError};
 use mpa_sync::{drain_outbox, PairingStore, SyncClient};
 use std::collections::{HashMap, HashSet};
@@ -13,7 +17,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[derive(Parser)]
-#[command(name = "mpa", about = "MyPaper print agent — Phase 1: spool watcher")]
+// `version` matters beyond courtesy: the update channel and the support
+// questions ("which build are you running?") both start with `mpa --version`.
+#[command(
+    name = "mpa",
+    version,
+    about = "MyPaper print agent — Phase 1: spool watcher"
+)]
 struct Cli {
     /// Config file override (default: OS config dir + MPA_CONFIG env).
     #[arg(long, global = true)]
@@ -32,21 +42,32 @@ enum Commands {
         #[arg(long, default_value_t = 2000)]
         quantum_ms: u64,
     },
-    /// Control a single job: pause | resume | cancel.
+    /// Control a single job: pause | resume | cancel | settings | set-options.
     Job {
+        #[command(subcommand)]
         action: JobAction,
-        printer: String,
-        job_id: u32,
     },
-    /// Show or edit the watched/ignored printer lists.
+    /// Show or edit the watched/ignored printer lists and the mono/color roles.
     Printers {
         #[command(subcommand)]
         action: Option<PrinterAction>,
+        /// Printer to query: lists the paper sizes, media types (paper
+        /// thickness), trays and duplex/color support its DRIVER reports.
+        #[arg(long)]
+        caps: Option<String>,
+    },
+    /// Print presets: what the agent may change on a job it re-renders
+    /// (paper size, duplex). The media type/thickness stays in the Windows
+    /// driver's own preferences.
+    Presets {
+        #[command(subcommand)]
+        action: Option<PresetAction>,
     },
     /// Analyze a file (image/PDF/PS) into per-page CMYK coverage.
     Analyze {
         file: PathBuf,
-        /// Tiers as id:min:max,... (e.g. "t6:0:50,t10:50.01:90").
+        /// Tiers as id:min:max[:BW|COLOR],... (e.g. "t6:0:50:COLOR,t10:50.01:90:COLOR").
+        /// Mode defaults to BW.
         #[arg(long)]
         tiers: Option<String>,
         /// Write page thumbnails (thumb-<n>.png) into this dir.
@@ -141,11 +162,52 @@ enum AutostartAction {
     Status,
 }
 
-#[derive(Clone, Copy, ValueEnum)]
+// Which job a `mpa job` subcommand acts on. A flattened struct (not a plain
+// doc comment) so the usage stays `mpa job pause <printer> <job_id>`: clap
+// parses parent-level positionals BEFORE the subcommand name, which would have
+// inverted them. Keep this as a `//` comment: a `///` one becomes the help text
+// of whichever subcommand clap sees first.
+#[derive(clap::Args)]
+struct JobRef {
+    /// Printer as it appears in the Printers control panel.
+    printer: String,
+    /// Job id from `mpa list-printers` / the spooler queue.
+    job_id: u32,
+}
+
+#[derive(Subcommand)]
 enum JobAction {
-    Pause,
-    Resume,
-    Cancel,
+    /// Hold the job (the spooler stops it before it prints).
+    Pause(JobRef),
+    /// Release a held job so it prints.
+    Resume(JobRef),
+    /// Drop the job without printing it.
+    Cancel(JobRef),
+    /// Show the print settings the held job carries (its Windows DEVMODE).
+    Settings(JobRef),
+    /// Change them in place: the spooler applies them when the job resumes.
+    SetOptions {
+        #[command(flatten)]
+        target: JobRef,
+        /// Paper size name as the driver spells it (`mpa printers caps` lists them).
+        #[arg(long)]
+        paper: Option<String>,
+        /// Media type / paper thickness name from the driver's own list.
+        #[arg(long)]
+        media_type: Option<String>,
+        /// Two-sided printing.
+        #[arg(long, conflicts_with = "simplex")]
+        duplex: bool,
+        /// Single-sided printing.
+        #[arg(long)]
+        simplex: bool,
+        /// Color printing.
+        #[arg(long, conflicts_with = "mono")]
+        color: bool,
+        /// Monochrome printing.
+        #[arg(long)]
+        mono: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -158,6 +220,56 @@ enum PrinterAction {
     Clear { name: String },
     /// Switch policy: allowlist (only watched) or denylist (all but ignored).
     Mode { mode: ModeArg },
+    /// Assign the mono and/or color role to an installed printer.
+    Set {
+        /// Printer that prints black and white (the default role).
+        #[arg(long)]
+        bw: Option<String>,
+        /// Printer that prints in color.
+        #[arg(long)]
+        color: Option<String>,
+    },
+    /// Drop a role assignment (--bw / --color; no flags clears both).
+    Unset {
+        #[arg(long)]
+        bw: bool,
+        #[arg(long)]
+        color: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum PresetAction {
+    /// Create or replace a preset by name.
+    Add {
+        #[arg(long)]
+        name: String,
+        /// Ghostscript paper size (a4, letter, legal, ledger…).
+        #[arg(long)]
+        paper: Option<String>,
+        /// Explicit page width in points (needs --height-points too).
+        #[arg(long)]
+        width_points: Option<u32>,
+        /// Explicit page height in points (needs --width-points too).
+        #[arg(long)]
+        height_points: Option<u32>,
+        /// Two-sided printing (the driver must support it).
+        #[arg(long)]
+        duplex: bool,
+        /// Bind the verso on the short edge instead of the long edge.
+        #[arg(long)]
+        tumble: bool,
+        /// Media type / paper thickness as the driver spells it (`mpa printers
+        /// --caps <printer>` lists the driver's own names). Applied through the
+        /// job's DEVMODE, so it also works for jobs mswinpr2 cannot re-render.
+        #[arg(long)]
+        media_type: Option<String>,
+    },
+    /// Delete a preset by name.
+    Remove {
+        #[arg(long)]
+        name: String,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -188,24 +300,98 @@ fn run() -> Result<(), AppError> {
                 println!("{}\t{}", p.name, p.status);
             }
         }
-        Commands::Job {
-            action,
-            printer,
-            job_id,
-        } => {
+        Commands::Job { action } => {
+            let (printer, job_id) = match &action {
+                JobAction::Pause(job)
+                | JobAction::Resume(job)
+                | JobAction::Cancel(job)
+                | JobAction::Settings(job) => (job.printer.clone(), job.job_id),
+                JobAction::SetOptions { target, .. } => (target.printer.clone(), target.job_id),
+            };
             match action {
-                JobAction::Pause => backend.pause_job(&printer, job_id)?,
-                JobAction::Resume => backend.resume_job(&printer, job_id)?,
-                JobAction::Cancel => backend.cancel_job(&printer, job_id)?,
+                JobAction::Pause(_) => backend.pause_job(&printer, job_id)?,
+                JobAction::Resume(_) => backend.resume_job(&printer, job_id)?,
+                JobAction::Cancel(_) => backend.cancel_job(&printer, job_id)?,
+                JobAction::Settings(_) => {
+                    let settings = backend.job_settings(&printer, job_id)?;
+                    print_job_settings(&printer, job_id, &settings);
+                    return Ok(());
+                }
+                JobAction::SetOptions {
+                    paper,
+                    media_type,
+                    duplex,
+                    simplex,
+                    color,
+                    mono,
+                    ..
+                } => {
+                    let requested = mpa_spool::JobSettings {
+                        paper,
+                        media_type,
+                        duplex: if duplex {
+                            Some(true)
+                        } else if simplex {
+                            Some(false)
+                        } else {
+                            None
+                        },
+                        color: if color {
+                            Some(true)
+                        } else if mono {
+                            Some(false)
+                        } else {
+                            None
+                        },
+                    };
+                    if requested == mpa_spool::JobSettings::default() {
+                        eprintln!("nothing to change: pass --paper/--media-type/--duplex/--simplex/--color/--mono");
+                        std::process::exit(2);
+                    }
+                    println!("requested:");
+                    print_job_settings(&printer, job_id, &requested);
+                    // The spooler's answer after the change is what matters, so
+                    // print the read-back instead of trusting the request.
+                    let applied = backend.apply_job_settings(&printer, job_id, &requested)?;
+                    println!("after the change (read back from the spooler):");
+                    print_job_settings(&printer, job_id, &applied);
+                    if !applied.satisfies(&requested) {
+                        // Accepted by the API but not in effect: the job keeps
+                        // its original DEVMODE, so the agent must reprint.
+                        eprintln!(
+                            "aviso: el spooler aceptó el cambio pero conserva los ajustes \
+                             originales; el agente aplicará el preset reimprimiendo"
+                        );
+                    }
+                    return Ok(());
+                }
             }
             let verb = match action {
-                JobAction::Pause => "paused",
-                JobAction::Resume => "resumed",
-                JobAction::Cancel => "cancelled",
+                JobAction::Pause(_) => "paused",
+                JobAction::Resume(_) => "resumed",
+                JobAction::Cancel(_) => "cancelled",
+                JobAction::Settings(_) | JobAction::SetOptions { .. } => unreachable!(),
             };
             println!("job {job_id} on {printer} {verb}");
         }
-        Commands::Printers { action } => {
+        Commands::Printers { action, caps } => {
+            if let Some(printer) = caps {
+                let caps = backend.printer_caps(&printer)?;
+                println!("printer: {printer}");
+                println!(
+                    "duplex: {} ({})",
+                    if caps.duplex_modes > 0 { "sí" } else { "no" },
+                    caps.duplex_modes
+                );
+                println!("color: {}", if caps.color { "sí" } else { "no" });
+                println!("papel ({}): {}", caps.papers.len(), caps.papers.join(", "));
+                println!(
+                    "tipo/grosor de papel ({}): {}",
+                    caps.media_types.len(),
+                    caps.media_types.join(", ")
+                );
+                return Ok(());
+            }
             let (mut policy, path) = load_policy(cli.config)?;
             match action {
                 None => {
@@ -216,6 +402,7 @@ fn run() -> Result<(), AppError> {
                     println!("mode: {mode}");
                     println!("watched: {}", policy.watched.join(", "));
                     println!("ignored: {}", policy.ignored.join(", "));
+                    print_roles(&load_roles(&path));
                     println!("config: {}", path.display());
                 }
                 Some(PrinterAction::Watch { name }) => {
@@ -247,6 +434,98 @@ fn run() -> Result<(), AppError> {
                     };
                     save_policy(&policy, &path)?;
                     println!("saved to {}", path.display());
+                }
+                Some(PrinterAction::Set { bw, color }) => {
+                    let mut roles = load_roles(&path);
+                    if let Some(name) = bw {
+                        roles.bw = Some(name);
+                    }
+                    if let Some(name) = color {
+                        roles.color = Some(name);
+                    }
+                    save_roles(&roles, &path)?;
+                    print_roles(&roles);
+                    println!("saved to {}", path.display());
+                }
+                Some(PrinterAction::Unset { bw, color }) => {
+                    let mut roles = load_roles(&path);
+                    // No flags at all = clear both roles.
+                    let both = !bw && !color;
+                    if bw || both {
+                        roles.bw = None;
+                    }
+                    if color || both {
+                        roles.color = None;
+                    }
+                    save_roles(&roles, &path)?;
+                    print_roles(&roles);
+                    println!("saved to {}", path.display());
+                }
+            }
+        }
+        Commands::Presets { action } => {
+            let path = config_path(cli.config.clone())?;
+            let mut presets = load_presets(&path);
+            match action {
+                None => {
+                    if presets.is_empty() {
+                        println!("no presets configured");
+                    }
+                    for preset in &presets {
+                        println!("{}: {}", preset.name, preset.options.label());
+                        for arg in preset.options.gs_args() {
+                            println!("  {arg}");
+                        }
+                    }
+                    println!("config: {}", path.display());
+                }
+                Some(PresetAction::Add {
+                    name,
+                    paper,
+                    width_points,
+                    height_points,
+                    duplex,
+                    tumble,
+                    media_type,
+                }) => {
+                    // A width without a height cannot pin a page; keep the name
+                    // as the source of truth instead of storing half a size.
+                    let geometry = match (width_points, height_points) {
+                        (Some(w), Some(h)) => (Some(w), Some(h)),
+                        _ => (None, None),
+                    };
+                    if (width_points.is_some() || height_points.is_some()) && geometry.0.is_none() {
+                        println!("--width-points and --height-points go together; ignoring them");
+                    }
+                    let options = mpa_domain::PrintOptions {
+                        paper,
+                        width_points: geometry.0,
+                        height_points: geometry.1,
+                        duplex,
+                        tumble,
+                        media_type,
+                    };
+                    if options.is_empty() {
+                        eprintln!("a preset with no options would print nothing differently");
+                        std::process::exit(2);
+                    }
+                    presets.retain(|p| p.name != name);
+                    presets.push(mpa_domain::PrintPreset {
+                        name: name.clone(),
+                        options,
+                    });
+                    save_presets(&presets, &path)?;
+                    println!("preset \"{name}\" saved to {}", path.display());
+                }
+                Some(PresetAction::Remove { name }) => {
+                    let before = presets.len();
+                    presets.retain(|p| p.name != name);
+                    if presets.len() == before {
+                        eprintln!("no preset named \"{name}\"");
+                        std::process::exit(2);
+                    }
+                    save_presets(&presets, &path)?;
+                    println!("preset \"{name}\" removed from {}", path.display());
                 }
             }
         }
@@ -581,6 +860,10 @@ fn load_core(config_override: Option<PathBuf>) -> Result<(AgentCore, PathBuf), A
     if core.tiers().is_empty() {
         if let Ok(cfg) = mpa_agent::config_path(config_override) {
             core.set_tiers(load_tiers(&cfg));
+            core.set_metrics(load_metrics(&cfg));
+            // Roles and presets describe this PC's printers, not runtime state.
+            core.set_roles(load_roles(&cfg));
+            core.set_presets(load_presets(&cfg));
         }
     }
     Ok((core, state_path))
@@ -674,6 +957,10 @@ fn push_test_command(
             .collect(),
         format: None,
         spool_path: None,
+        mode: mpa_domain::PrintMode::Bw,
+        deliver_printer: None,
+        options: None,
+        applied_settings: None,
         reprint_pending: false,
         synced: false,
         remote_id: None,
@@ -737,6 +1024,61 @@ fn parse_coverage(spec: Option<&str>) -> Result<Coverage, AppError> {
     ))
 }
 
+/// Print a job's print settings (its DEVMODE) in a stable, greppable shape.
+fn print_job_settings(printer: &str, job_id: u32, settings: &mpa_spool::JobSettings) {
+    let dash = "—".to_string();
+    println!("job {job_id} on {printer}");
+    println!(
+        "  paper:      {}",
+        settings.paper.as_deref().unwrap_or(&dash)
+    );
+    println!(
+        "  media type: {}",
+        settings.media_type.as_deref().unwrap_or(&dash)
+    );
+    println!(
+        "  duplex:     {}",
+        match settings.duplex {
+            Some(true) => "doble cara",
+            Some(false) => "una cara",
+            None => "—",
+        }
+    );
+    println!(
+        "  color:      {}",
+        match settings.color {
+            Some(true) => "color",
+            Some(false) => "monocromo",
+            None => "—",
+        }
+    );
+}
+
+/// Installed printers on this PC, flagging the mono / color roles. The physical
+/// printer must already be set up for that ink — the agent only routes jobs.
+fn print_roles(roles: &mpa_domain::PrinterRoles) {
+    let installed = mpa_spool::default_backend()
+        .list_printers()
+        .unwrap_or_default();
+    let names: Vec<&str> = installed.iter().map(|p| p.name.as_str()).collect();
+    println!(
+        "installed ({}): {}",
+        names.len(),
+        if names.is_empty() {
+            "—".to_string()
+        } else {
+            names.join(", ")
+        }
+    );
+    for (label, value) in [("bw", &roles.bw), ("color", &roles.color)] {
+        match value {
+            Some(name) if names.contains(&name.as_str()) => println!("{label}: {name}"),
+            Some(name) => println!("{label}: {name}  (no instalada en esta PC)"),
+            None => println!("{label}: —"),
+        }
+    }
+}
+
 fn tiers_command(
     action: Option<TierAction>,
     config_override: Option<PathBuf>,
@@ -759,16 +1101,29 @@ fn tiers_command(
             let pairing = PairingStore::load(None)?;
             let client = SyncClient::new(&pairing.server_url, Some(pairing.agent_key))?;
             let remote = client.get_tiers()?;
-            let tiers: Vec<Tier> = remote.iter().map(|t| t.to_domain()).collect();
+            let sync = client.get_tiers_sync()?;
+            let tiers: Vec<Tier> = sync.tiers.clone();
             // Persist into the state file (what the UI/runtime read)…
             let (mut core, state_path) = load_core(config_override.clone())?;
             core.set_tiers(tiers.clone());
+            core.set_metrics(sync.metrics);
+            // Fase 6: the rules the server prices with, so the local labels agree.
+            core.set_pricing(sync.pricing);
+            // …and the prices themselves, so the local label can pick the
+            // dearest rule set instead of always preferring color.
+            core.set_tier_prices(sync.prices.clone());
             save_core(&core, &state_path)?;
-            // …and mirror into config [[tiers]] as the offline fallback.
+            // …and mirror into config [[tiers]] + [metrics] as the offline fallback.
             if let Ok(cfg) = mpa_agent::config_path(config_override) {
-                let _ = mpa_agent::save_tiers(&tiers, &cfg);
+                let _ = save_tiers(&tiers, &cfg);
+                let _ = save_metrics(&sync.metrics, &cfg);
             }
-            println!("synced {} tiers:", remote.len());
+            println!(
+                "synced {} tiers (BW: {:?}, COLOR: {:?}):",
+                remote.len(),
+                sync.metrics.bw,
+                sync.metrics.color
+            );
             for t in &remote {
                 let price = t
                     .price
@@ -897,11 +1252,21 @@ fn parse_tiers(spec: &str) -> Result<Vec<Tier>, AppError> {
     let mut tiers = Vec::new();
     for part in spec.split(',') {
         let fields: Vec<&str> = part.split(':').collect();
-        if fields.len() != 3 {
+        if fields.len() != 3 && fields.len() != 4 {
             return Err(AppError::Tiers(format!("bad tier: {part}")));
         }
+        // `id:min:max[:BW|COLOR]`; BW (the mono rule set) is the default.
+        let mode = match fields.get(3) {
+            None => PrintMode::Bw,
+            Some(raw) => match raw.to_ascii_uppercase().as_str() {
+                "BW" => PrintMode::Bw,
+                "COLOR" => PrintMode::Color,
+                other => return Err(AppError::Tiers(format!("bad mode: {other}"))),
+            },
+        };
         tiers.push(Tier {
             id: fields[0].to_string(),
+            mode,
             min_coverage: fields[1]
                 .parse()
                 .map_err(|_| AppError::Tiers(format!("bad min: {part}")))?,
@@ -941,19 +1306,36 @@ fn analyze_command(
     }
 
     println!("format: {:?}", analysis.format);
+    // Metrics from config.toml: the same rule sets MyPaper prices with.
+    let metrics = mpa_agent::config_path(None)
+        .map(|cfg| load_metrics(&cfg))
+        .unwrap_or_default();
+    println!("metrics: bw={:?} color={:?}", metrics.bw, metrics.color);
     for page in &analysis.pages {
         let c = &page.coverage;
         let color = c.color_coverage();
-        let tier = if tiers.is_empty() {
-            "-".to_string()
-        } else {
-            classify_coverage(color, &tiers)
-                .map(|t| t.id.clone())
-                .unwrap_or_else(|| "NONE".into())
+        // Both rule sets, so the operator can see which one would bill the page.
+        let tier = |mode| {
+            if tiers.is_empty() {
+                "-".to_string()
+            } else if mode == PrintMode::Color && !has_color_ink(c) {
+                "NONE (sin tinta de color)".to_string()
+            } else {
+                classify_coverage(metric_coverage(metrics.for_mode(mode), c), &tiers, mode)
+                    .map(|t| t.id.clone())
+                    .unwrap_or_else(|| "NONE".into())
+            }
         };
         println!(
-            "page {}\tC={:.2} M={:.2} Y={:.2} K={:.2}\tcolor={:.2}%\ttier={tier}",
-            page.page_no, c.c, c.m, c.y, c.k, color
+            "page {}\tC={:.2} M={:.2} Y={:.2} K={:.2}\tcolor={:.2}%\tbw={}\tcolor_tier={}",
+            page.page_no,
+            c.c,
+            c.m,
+            c.y,
+            c.k,
+            color,
+            tier(PrintMode::Bw),
+            tier(PrintMode::Color)
         );
     }
     Ok(())

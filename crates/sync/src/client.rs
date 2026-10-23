@@ -1,5 +1,5 @@
 use mpa_agent::{OutboxEntry, TargetSelection};
-use mpa_domain::Tier;
+use mpa_domain::{MetricsByMode, PrintMode, Tier};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use thiserror::Error;
@@ -56,7 +56,25 @@ pub struct VersionInfo {
 
 #[derive(Debug, Clone, Deserialize)]
 struct TiersResponse {
+    /// Billing metric per mode; absent on servers predating Fase 8.
+    #[serde(default)]
+    metrics: MetricsByMode,
+    /// Fase 6 billing rules; an older server sends none.
+    #[serde(default)]
+    pricing: mpa_domain::PrintPricing,
     tiers: Vec<RemoteTier>,
+}
+
+/// Tabulador plus the billing metrics and the Fase 6 rules MyPaper prices with.
+#[derive(Debug, Clone)]
+pub struct TierSync {
+    pub tiers: Vec<Tier>,
+    pub metrics: MetricsByMode,
+    /// Fase 6 rules (intensity, greys, blank pages, paper, volume).
+    pub pricing: mpa_domain::PrintPricing,
+    /// Tier id → price, so the agent can label a page with the rule set that
+    /// would actually be dearest (the server still prices authoritatively).
+    pub prices: std::collections::HashMap<String, f32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -64,6 +82,10 @@ struct TiersResponse {
 pub struct RemoteTier {
     pub id: String,
     pub label: String,
+    /// Rule set. Servers predating Fase 1 only had color rules, so a missing
+    /// field defaults to COLOR instead of the enum's BW default.
+    #[serde(default = "legacy_tier_mode")]
+    pub mode: PrintMode,
     pub min_coverage: f64,
     pub max_coverage: f64,
     pub product_id: String,
@@ -73,10 +95,15 @@ pub struct RemoteTier {
     pub sort_order: i32,
 }
 
+fn legacy_tier_mode() -> PrintMode {
+    PrintMode::Color
+}
+
 impl RemoteTier {
     pub fn to_domain(&self) -> Tier {
         Tier {
             id: self.id.clone(),
+            mode: self.mode,
             min_coverage: self.min_coverage as f32,
             max_coverage: self.max_coverage as f32,
             active: self.is_active,
@@ -152,7 +179,80 @@ struct JobBody {
     idempotency_key: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     target_order_id: Option<String>,
+    /// Rule set the operator chose; MyPaper prices the draft with it.
+    mode: mpa_domain::PrintMode,
     pages: Vec<JobPage>,
+}
+
+/// One page as the quote endpoint expects it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotePage {
+    pub page_no: u32,
+    pub c: f32,
+    pub m: f32,
+    pub y: f32,
+    pub k: f32,
+    pub include: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuoteLine {
+    pub page_no: u32,
+    #[serde(default)]
+    pub coverage: f32,
+    #[serde(default)]
+    pub tier_id: Option<String>,
+    #[serde(default)]
+    pub tier_label: Option<String>,
+    #[serde(default)]
+    pub product_id: Option<String>,
+    #[serde(default)]
+    pub product_name: Option<String>,
+    #[serde(default)]
+    pub unit_price: f64,
+}
+
+/// What one printer role would cost for the analyzed pages.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuoteMode {
+    #[serde(default)]
+    pub total: f64,
+    #[serde(default)]
+    pub page_count: i32,
+    /// Pages the tabulador could not price in this mode.
+    #[serde(default)]
+    pub unpriced: Vec<u32>,
+    #[serde(default)]
+    pub lines: Vec<QuoteLine>,
+}
+
+/// Quote for both rule sets. The server keys them by mode, uppercase.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub struct QuoteModes {
+    #[serde(default)]
+    pub bw: QuoteMode,
+    #[serde(default)]
+    pub color: QuoteMode,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Quote {
+    #[serde(default)]
+    pub modes: QuoteModes,
+}
+
+impl Quote {
+    /// Price of the rule set the operator picked (BW is the default).
+    pub fn for_mode(&self, mode: PrintMode) -> &QuoteMode {
+        match mode {
+            PrintMode::Bw => &self.modes.bw,
+            PrintMode::Color => &self.modes.color,
+        }
+    }
 }
 
 /// Thin client for the Fase 0 contract (`/api/agent/*`). Bearer key on
@@ -253,6 +353,23 @@ impl SyncClient {
         Ok(body.tiers)
     }
 
+    /// Tabulador mapped to domain types plus the metrics in force.
+    pub fn get_tiers_sync(&self) -> Result<TierSync, SyncError> {
+        let url = format!("{}/api/agent/tiers", self.base_url);
+        let res = Self::check(self.auth(self.http.get(&url)).send()?)?;
+        let body: TiersResponse = res.json().map_err(|e| SyncError::Parse(e.to_string()))?;
+        Ok(TierSync {
+            tiers: body.tiers.iter().map(|t| t.to_domain()).collect(),
+            metrics: body.metrics,
+            pricing: body.pricing,
+            prices: body
+                .tiers
+                .iter()
+                .filter_map(|t| t.price.map(|price| (t.id.clone(), price as f32)))
+                .collect(),
+        })
+    }
+
     pub fn get_open_tickets(&self) -> Result<Vec<mpa_agent::Ticket>, SyncError> {
         let url = format!("{}/api/agent/open-tickets", self.base_url);
         let res = Self::check(self.auth(self.http.get(&url)).send()?)?;
@@ -288,6 +405,7 @@ impl SyncClient {
                 TargetSelection::Ticket(id) => Some(id.clone()),
                 _ => None,
             },
+            mode: entry.mode,
             pages: entry
                 .pages
                 .iter()
@@ -310,11 +428,78 @@ impl SyncClient {
             .ok_or_else(|| SyncError::Parse("missing jobId".into()))
     }
 
+    /// Prices the analyzed pages in BOTH modes without storing anything: the
+    /// operator sees what each printer role would cost before choosing.
+    pub fn quote(&self, pages: &[QuotePage]) -> Result<Quote, SyncError> {
+        let url = format!("{}/api/agent/quote", self.base_url);
+        let body = serde_json::json!({ "pages": pages });
+        let res = Self::check(self.auth(self.http.post(&url)).json(&body).send()?)?;
+        res.json().map_err(|e| SyncError::Parse(e.to_string()))
+    }
+
     /// Inject a pushed draft into its ticket as order lines. Idempotent
     /// server-side: replaying returns the same summary without duplicating.
     pub fn materialize_job(&self, job_id: &str) -> Result<MaterializeAck, SyncError> {
         let url = format!("{}/api/agent/jobs/{job_id}/materialize", self.base_url);
         let res = Self::check(self.auth(self.http.post(&url)).send()?)?;
         res.json().map_err(|e| SyncError::Parse(e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_a_quote_with_both_modes() {
+        // Shape produced by POST /api/agent/quote.
+        let raw = r#"{
+            "metrics": {"BW": "K_ONLY", "COLOR": "SUM_CMYK"},
+            "modes": {
+                "BW": {"total": 4.0, "pageCount": 1, "unpriced": [], "lines": [
+                    {"pageNo": 1, "coverage": 62.5, "tierId": "t1", "tierLabel": "B/N 0-100",
+                     "productId": "p1", "productName": "IMPRESIÓN B/N", "unitPrice": 2.0}
+                ]},
+                "COLOR": {"total": 6.5, "pageCount": 0, "unpriced": [2], "lines": []}
+            }
+        }"#;
+
+        let quote: Quote = serde_json::from_str(raw).expect("quote parses");
+        assert_eq!(quote.for_mode(PrintMode::Bw).total, 4.0);
+        assert_eq!(
+            quote.for_mode(PrintMode::Bw).lines[0]
+                .product_name
+                .as_deref(),
+            Some("IMPRESIÓN B/N")
+        );
+        assert_eq!(quote.for_mode(PrintMode::Color).total, 6.5);
+        assert_eq!(quote.for_mode(PrintMode::Color).unpriced, vec![2]);
+    }
+
+    #[test]
+    fn a_quote_without_modes_is_empty_not_an_error() {
+        let quote: Quote = serde_json::from_str("{}").expect("empty quote parses");
+        assert_eq!(quote.for_mode(PrintMode::Bw).total, 0.0);
+        assert_eq!(quote.for_mode(PrintMode::Color).page_count, 0);
+    }
+
+    #[test]
+    fn a_tier_without_a_mode_is_treated_as_color() {
+        // Servers predating Fase 1 only had color rules.
+        let raw = r#"{"tiers": [{"id": "t1", "label": "x", "minCoverage": 0, "maxCoverage": 50,
+            "productId": "p1", "isActive": true, "sortOrder": 0}],
+            "metrics": {"BW": "K_ONLY", "COLOR": "SUM_CMYK"},
+            "pricing": {"intensityThreshold": 5, "greysAsColor": false,
+                        "blankPageFree": true, "paperSurcharge": 0.5,
+                        "volumeDiscounts": [{"minPages": 20, "percent": 10}]}}"#;
+        let response: TiersResponse = serde_json::from_str(raw).expect("tiers parse");
+        assert_eq!(response.tiers[0].to_domain().mode, PrintMode::Color);
+        assert_eq!(response.metrics.bw, mpa_domain::PrintMetric::KOnly);
+        assert_eq!(response.metrics.color, mpa_domain::PrintMetric::SumCmyk);
+        // Fase 6 rules ride the same payload; the agent labels with them.
+        assert_eq!(response.pricing.intensity_threshold, 5.0);
+        assert!(!response.pricing.greys_as_color);
+        assert_eq!(response.pricing.paper_surcharge, 0.5);
+        assert_eq!(response.pricing.volume_discount_percent(25), 10.0);
     }
 }

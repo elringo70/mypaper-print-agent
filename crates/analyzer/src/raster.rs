@@ -54,7 +54,8 @@ pub fn encode_jpeg_rgba(
     use image::ImageEncoder;
 
     let mut rgb = Vec::with_capacity((width * height * 3) as usize);
-    for px in rgba.chunks_exact(4) {
+    // Same semantics as `chunks_exact(4)`: a trailing partial pixel is dropped.
+    for px in rgba.as_chunks::<4>().0 {
         let alpha = px[3] as f32 / 255.0;
         rgb.push((px[0] as f32 * alpha + 255.0 * (1.0 - alpha)) as u8);
         rgb.push((px[1] as f32 * alpha + 255.0 * (1.0 - alpha)) as u8);

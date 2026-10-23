@@ -1,6 +1,6 @@
 use gpui::{App, Context, Entity};
 use mpa_agent::{AgentCore, AgentError, AgentMode, Completion, TargetSelection, Ticket};
-use mpa_domain::{Coverage, JobState};
+use mpa_domain::{Coverage, JobState, PrintMode};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -17,6 +17,10 @@ pub struct JobView {
     pub analysis_error: Option<String>,
     pub warnings: Vec<String>,
     pub target: TargetSelection,
+    /// Rule set the operator chose (B/N by default) — the checkbox in the UI.
+    pub print_mode: PrintMode,
+    /// Print preset the operator chose, if any (Fase 4).
+    pub preset: Option<String>,
 }
 
 #[derive(Debug)]
@@ -58,8 +62,29 @@ pub struct UiState {
     pub outbox_len: usize,
     pub outbox_pending: usize,
     pub mode: mpa_agent::AgentMode,
+    /// Link state as of the last call to MyPaper (see `AgentCore::link_ok`).
+    pub link_ok: bool,
+    /// Mono / color printer roles configured on this PC.
+    pub roles: mpa_domain::PrinterRoles,
+    /// Print presets configured on this PC (Fase 4).
+    pub presets: Vec<mpa_domain::PrintPreset>,
+    /// Destinations of the analyses already queued, so the operator can see a
+    /// ticket that already received one (double-attach warning).
+    pub outbox_targets: Vec<TargetSelection>,
+    /// Ticket filter typed by the operator (number or cashier).
+    pub ticket_filter: String,
+    /// Destination the operator last chose per document name. A re-print of the
+    /// same document lands on the same ticket without re-picking it.
+    pub last_target_by_document: std::collections::HashMap<String, TargetSelection>,
     pub update_available: Option<String>,
     pub notice: Option<String>,
+    /// Prices per job, fetched off-thread from MyPaper after the analysis
+    /// (MyPaper is the source of truth and prices change with the tabulador).
+    pub quotes: std::collections::HashMap<(String, u32), mpa_sync::Quote>,
+    quotes_pending: std::collections::HashSet<(String, u32)>,
+    quotes_failed: std::collections::HashSet<(String, u32)>,
+    quote_tx: std::sync::mpsc::Sender<(String, u32, Option<mpa_sync::Quote>)>,
+    quote_rx: std::sync::mpsc::Receiver<(String, u32, Option<mpa_sync::Quote>)>,
 }
 
 impl std::fmt::Debug for UiState {
@@ -78,6 +103,7 @@ impl UiState {
         state_path: std::path::PathBuf,
         tray: Option<crate::tray::Tray>,
     ) -> Self {
+        let (quote_tx, quote_rx) = std::sync::mpsc::channel();
         let mut state = Self {
             core,
             state_path,
@@ -90,11 +116,147 @@ impl UiState {
             outbox_len: 0,
             outbox_pending: 0,
             mode: mpa_agent::AgentMode::Active,
+            link_ok: false,
+            roles: mpa_domain::PrinterRoles::default(),
+            presets: Vec::new(),
+            outbox_targets: Vec::new(),
+            ticket_filter: String::new(),
+            last_target_by_document: std::collections::HashMap::new(),
             update_available: None,
             notice: None,
+            quotes: std::collections::HashMap::new(),
+            quotes_pending: std::collections::HashSet::new(),
+            quotes_failed: std::collections::HashSet::new(),
+            quote_tx,
+            quote_rx,
         };
         state.pull();
         state
+    }
+
+    /// Drains finished quotes. Called from the poll tick: the fetch runs on a
+    /// worker thread and lands here, so the UI thread never blocks on HTTP.
+    fn drain_quotes(&mut self) {
+        while let Ok((printer, job_id, quote)) = self.quote_rx.try_recv() {
+            let key = (printer, job_id);
+            self.quotes_pending.remove(&key);
+            match quote {
+                Some(quote) => {
+                    self.quotes.insert(key, quote);
+                }
+                // Failed fetch: remember it so the poll tick does not hammer
+                // the server every frame. A page change clears it.
+                None => {
+                    self.quotes_failed.insert(key);
+                }
+            }
+        }
+    }
+
+    /// Asks MyPaper what the job's included pages would cost in both modes.
+    /// No-op when the job has no analysis, is already quoted, or a fetch is in
+    /// flight; the worker only ever sends the result through the channel.
+    fn ensure_quote(&mut self, printer: &str, job_id: u32) {
+        let key = (printer.to_string(), job_id);
+        if self.quotes.contains_key(&key)
+            || self.quotes_pending.contains(&key)
+            || self.quotes_failed.contains(&key)
+        {
+            return;
+        }
+        let pages: Vec<mpa_sync::QuotePage> = self
+            .jobs
+            .iter()
+            .find(|j| j.printer == printer && j.job_id == job_id)
+            .map(|job| {
+                job.pages
+                    .iter()
+                    .filter(|page| page.included)
+                    .map(|page| mpa_sync::QuotePage {
+                        page_no: page.page_no,
+                        c: page.coverage.c,
+                        m: page.coverage.m,
+                        y: page.coverage.y,
+                        k: page.coverage.k,
+                        include: true,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if pages.is_empty() {
+            return;
+        }
+
+        self.quotes_pending.insert(key.clone());
+        let tx = self.quote_tx.clone();
+        std::thread::spawn(move || {
+            let quote = match mpa_sync::PairingStore::load(None) {
+                Err(_) => None,
+                Ok(pairing) => {
+                    match mpa_sync::SyncClient::new(&pairing.server_url, Some(pairing.agent_key)) {
+                        Err(_) => None,
+                        Ok(client) => client.quote(&pages).ok(),
+                    }
+                }
+            };
+            let _ = tx.send((key.0, key.1, quote));
+        });
+    }
+
+    /// Operator's B/N or Color choice for a job. Changing it re-prices the
+    /// draft, so the cached quote is dropped.
+    pub fn set_print_mode(
+        &mut self,
+        cx: &mut Context<Self>,
+        printer: String,
+        job_id: u32,
+        mode: PrintMode,
+    ) {
+        self.mutate(cx, |core| {
+            core.set_print_mode(&printer, job_id, mode)?;
+            Ok(String::new())
+        });
+        self.invalidate_quote(&printer, job_id);
+        // Price it again with the newly chosen rule set.
+        self.ensure_quote(&printer, job_id);
+    }
+
+    /// Operator's print preset for a job. Any preset forces the cancel +
+    /// reprint path, so the cached quote stays valid but the print differs.
+    pub fn set_preset(
+        &mut self,
+        cx: &mut Context<Self>,
+        printer: String,
+        job_id: u32,
+        preset: Option<String>,
+    ) {
+        self.mutate(cx, |core| {
+            core.set_preset(&printer, job_id, preset)?;
+            Ok(String::new())
+        });
+    }
+
+    /// Label of a preset by name, for the summary line.
+    pub fn preset_label(&self, name: &str) -> Option<String> {
+        self.presets
+            .iter()
+            .find(|p| p.name == name)
+            .map(|p| p.options.label())
+    }
+
+    /// Mono / color roles as configured on this PC.
+    pub fn role_printer(&self, mode: PrintMode) -> Option<&str> {
+        match mode {
+            PrintMode::Bw => self.roles.bw.as_deref(),
+            PrintMode::Color => self.roles.color.as_deref(),
+        }
+    }
+
+    /// Drops a job's quote after the operator changes which pages are included.
+    pub fn invalidate_quote(&mut self, printer: &str, job_id: u32) {
+        let key = (printer.to_string(), job_id);
+        self.quotes.remove(&key);
+        self.quotes_failed.remove(&key);
     }
 
     fn pull(&mut self) {
@@ -103,6 +265,10 @@ impl UiState {
         };
         self.version = core.version();
         self.mode = core.mode();
+        self.link_ok = core.link_ok();
+        self.roles = core.roles();
+        self.presets = core.presets();
+        self.outbox_targets = core.outbox().iter().map(|e| e.target.clone()).collect();
         self.jobs = core
             .snapshot()
             .into_iter()
@@ -125,11 +291,33 @@ impl UiState {
                 analysis_error: j.analysis_error,
                 warnings: j.warnings,
                 target: j.target,
+                print_mode: j.print_mode,
+                preset: j.preset,
             })
             .collect();
         // In-memory read only: the source itself is a blocking HTTP call on
         // paired agents, refreshed off-thread by `spawn_ticket_refresh`.
         self.tickets = core.cached_tickets().to_vec();
+        // A re-print of a document the operator already assigned lands on the
+        // same ticket — but only while that ticket is still open, so a stale
+        // memory cannot attach an analysis to a closed sale.
+        let restore: Vec<(String, u32, TargetSelection)> = self
+            .jobs
+            .iter()
+            .filter(|job| job.target == TargetSelection::Unassigned)
+            .filter_map(|job| {
+                let remembered = self.last_target_by_document.get(&job.document)?;
+                match remembered {
+                    TargetSelection::Ticket(id) if self.tickets.iter().any(|t| &t.id == id) => {
+                        Some((job.printer.clone(), job.job_id, remembered.clone()))
+                    }
+                    _ => None,
+                }
+            })
+            .collect();
+        for (printer, job_id, target) in restore {
+            let _ = core.select_target(&printer, job_id, target);
+        }
         self.outbox_len = core.outbox_len();
         self.outbox_pending = core.pending_outbox();
         self.update_available = core.pending_update().map(|m| m.version);
@@ -196,6 +384,7 @@ impl UiState {
     }
 
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.drain_quotes();
         let version = self
             .core
             .lock()
@@ -214,6 +403,11 @@ impl UiState {
                 }
             }
             cx.notify();
+        }
+        // Quote the selected job once its analysis is in: the operator needs the
+        // price BEFORE deciding how to print.
+        if let Some((printer, job_id)) = self.selected.clone() {
+            self.ensure_quote(&printer, job_id);
         }
     }
 
@@ -270,9 +464,19 @@ impl UiState {
         std::thread::spawn(move || loop {
             let source = core.lock().ok().map(|c| c.ticket_source());
             if let Some(source) = source {
-                if let Ok(tickets) = source.list_open_tickets() {
-                    if let Ok(mut core) = core.lock() {
-                        core.set_cached_tickets(tickets);
+                match source.list_open_tickets() {
+                    Ok(tickets) => {
+                        if let Ok(mut core) = core.lock() {
+                            core.set_cached_tickets(tickets);
+                            core.set_link_status(true);
+                        }
+                    }
+                    // A failed poll means MyPaper is unreachable: the link
+                    // indicator must say so instead of showing stale tickets.
+                    Err(_) => {
+                        if let Ok(mut core) = core.lock() {
+                            core.set_link_status(false);
+                        }
                     }
                 }
             }
@@ -431,6 +635,8 @@ impl UiState {
             core.toggle_page(&printer, job_id, page_no)?;
             Ok(String::new())
         });
+        // The price depends on which pages are included.
+        self.invalidate_quote(&printer, job_id);
     }
 
     pub fn select_target(
@@ -440,10 +646,58 @@ impl UiState {
         job_id: u32,
         target: TargetSelection,
     ) {
+        let remembered = target.clone();
         self.mutate(cx, |core| {
             core.select_target(&printer, job_id, target)?;
             Ok(String::new())
         });
+        // Remember the choice for this document so a re-print of the same file
+        // does not have to be re-assigned.
+        if let Some(job) = self
+            .jobs
+            .iter()
+            .find(|j| j.printer == printer && j.job_id == job_id)
+        {
+            self.last_target_by_document
+                .insert(job.document.clone(), remembered);
+        }
+    }
+
+    /// One keystroke in the ticket filter. `key` is the gpui keystroke key
+    /// (`backspace`, `escape`, `a`…) and `key_char` the typed character.
+    pub fn ticket_filter_key(&mut self, cx: &mut Context<Self>, key: &str, key_char: Option<&str>) {
+        match key {
+            "backspace" => {
+                self.ticket_filter.pop();
+            }
+            "escape" => self.ticket_filter.clear(),
+            _ => {
+                if let Some(ch) = key_char {
+                    if !ch.is_empty() && !ch.chars().any(|c| c.is_control()) {
+                        self.ticket_filter.push_str(ch);
+                    }
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// Tickets matching the filter: substring of the ticket number or of the
+    /// cashier's name, case-insensitive. Substring (not exact) on purpose: an
+    /// operator typing "10" wants to see 101 and 102, not an empty list.
+    /// An empty filter offers every open ticket.
+    pub fn filtered_tickets(&self) -> Vec<&Ticket> {
+        let needle = self.ticket_filter.trim().to_lowercase();
+        if needle.is_empty() {
+            return self.tickets.iter().collect();
+        }
+        self.tickets
+            .iter()
+            .filter(|ticket| {
+                ticket.ticket_number.to_string().contains(&needle)
+                    || ticket.cashier.to_lowercase().contains(&needle)
+            })
+            .collect()
     }
 
     pub fn complete(&mut self, cx: &mut Context<Self>, printer: String, job_id: u32) {

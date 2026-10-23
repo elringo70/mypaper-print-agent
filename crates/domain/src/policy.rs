@@ -1,3 +1,37 @@
+/// Which installed printer serves each role. More than two printers can be
+/// installed, but only two are ever used for printing: one mono, one color.
+/// The physical printer must already be configured for that ink on the PC —
+/// the agent only routes jobs, it cannot verify mono/color mode.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PrinterRoles {
+    /// Printer that prints black and white (the default role).
+    #[serde(default)]
+    pub bw: Option<String>,
+    /// Printer that prints in color.
+    #[serde(default)]
+    pub color: Option<String>,
+}
+
+impl PrinterRoles {
+    pub fn for_mode(&self, mode: crate::coverage::PrintMode) -> Option<&str> {
+        match mode {
+            crate::coverage::PrintMode::Bw => self.bw.as_deref(),
+            crate::coverage::PrintMode::Color => self.color.as_deref(),
+        }
+    }
+
+    /// Role a printer is assigned to, if any.
+    pub fn role_of(&self, printer: &str) -> Option<crate::coverage::PrintMode> {
+        if self.bw.as_deref() == Some(printer) {
+            Some(crate::coverage::PrintMode::Bw)
+        } else if self.color.as_deref() == Some(printer) {
+            Some(crate::coverage::PrintMode::Color)
+        } else {
+            None
+        }
+    }
+}
+
 /// Which printers the agent intercepts. `Denylist` (default) watches every
 /// printer except `ignored`; `Allowlist` watches only `watched`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

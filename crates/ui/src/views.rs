@@ -1,9 +1,10 @@
 use crate::state::{update_state, JobView, UiState};
 use gpui::{
-    img, prelude::*, px, rgb, ClickEvent, Context, Entity, Image, ImageFormat, SharedString, Window,
+    img, prelude::*, px, rgb, ClickEvent, Context, Entity, Image, ImageFormat, KeyDownEvent,
+    SharedString, Window,
 };
 use mpa_agent::{AgentMode, TargetSelection};
-use mpa_domain::JobState;
+use mpa_domain::{JobState, PrintMode};
 use std::sync::Arc;
 
 const INK: u32 = 0x1f2937;
@@ -26,6 +27,8 @@ const PREVIEW_H: f32 = 182.;
 
 pub struct RootView {
     state: Entity<UiState>,
+    /// Focus handle of the ticket filter, so typing reaches the field.
+    ticket_filter_focus: gpui::FocusHandle,
 }
 
 impl std::fmt::Debug for RootView {
@@ -35,8 +38,11 @@ impl std::fmt::Debug for RootView {
 }
 
 impl RootView {
-    pub fn new(state: Entity<UiState>) -> Self {
-        Self { state }
+    pub fn new(state: Entity<UiState>, ticket_filter_focus: gpui::FocusHandle) -> Self {
+        Self {
+            state,
+            ticket_filter_focus,
+        }
     }
 
     /// State handle for tests and shell wiring (the single ownership seam).
@@ -101,6 +107,20 @@ fn header(view: &RootView, st: &UiState, cx: &Context<RootView>) -> impl IntoEle
                     update_state(&this.state, cx, |s, cx| s.toggle_mode(cx));
                 }))
                 .child(mode_label.to_string()),
+        )
+        // Link indicator: the last call to MyPaper either worked or did not.
+        .child(
+            gpui::div()
+                .px_3()
+                .py_2()
+                .rounded_md()
+                .bg(rgb(if st.link_ok { GOOD } else { WARN_BG }))
+                .text_color(rgb(if st.link_ok { PAPER } else { WARN }))
+                .child(if st.link_ok {
+                    "Enlace: conectado".to_string()
+                } else {
+                    "Enlace: sin conexión".to_string()
+                }),
         )
 }
 
@@ -228,7 +248,12 @@ fn detail(view: &RootView, st: &UiState, cx: &Context<RootView>) -> impl IntoEle
                 .child(preview_panel(job, st, cx)),
         )
         .child(summary_line(job))
+        .child(mode_picker(job, st, cx))
+        .child(quote_line(job, st))
         .child(target_picker(view, job, st, cx))
+        .children(target_summary(job, st))
+        .child(options_picker(job, st, cx))
+        .children(options_summary(job, st))
         .child(actions(view, job, cx))
 }
 
@@ -453,6 +478,194 @@ fn preview_image(thumb: &Arc<Vec<u8>>) -> impl IntoElement {
         )
 }
 
+/// Price of the selected job's included pages, as MyPaper quotes them. Shows
+/// BOTH printer roles with the mono one highlighted (the default per the spec)
+/// so the operator chooses with the number in hand.
+fn quote_line(job: &JobView, st: &UiState) -> impl IntoElement {
+    let key = (job.printer.clone(), job.job_id);
+    let Some(quote) = st.quotes.get(&key) else {
+        return gpui::div()
+            .text_xs()
+            .text_color(rgb(MUTED))
+            .child("Costo: cotizando con MyPaper…".to_string())
+            .into_any_element();
+    };
+
+    let bw = quote.modes.bw.clone();
+    let color = quote.modes.color.clone();
+    let unpriced: Vec<u32> = bw
+        .unpriced
+        .iter()
+        .chain(color.unpriced.iter())
+        .copied()
+        .collect();
+    let mut row = gpui::div().flex().flex_wrap().items_center().gap_3();
+    row = row.child(
+        gpui::div()
+            .text_sm()
+            .font_weight(gpui::FontWeight::BOLD)
+            .text_color(rgb(GOOD))
+            .child(format!("B/N ${:.2}", bw.total)),
+    );
+    row = row.child(
+        gpui::div()
+            .text_sm()
+            .text_color(rgb(INK))
+            .child(format!("Color ${:.2}", color.total)),
+    );
+    row = row.child(gpui::div().text_xs().text_color(rgb(MUTED)).child(format!(
+        "{} página(s) cotizadas",
+        bw.page_count + color.page_count
+    )));
+    if !unpriced.is_empty() {
+        let mut pages = unpriced.clone();
+        pages.sort_unstable();
+        pages.dedup();
+        let list: Vec<String> = pages.iter().map(|p| p.to_string()).collect();
+        row = row.child(
+            gpui::div()
+                .text_xs()
+                .text_color(rgb(WARN))
+                .child(format!("sin nivel: pág. {}", list.join(", "))),
+        );
+    }
+    row.into_any_element()
+}
+
+/// The B/N | Color checkbox. Black and white is selected by default; picking a
+/// mode routes the job to that role's printer and re-prices the draft with the
+/// matching rule set.
+fn mode_picker(job: &JobView, st: &UiState, cx: &Context<RootView>) -> impl IntoElement {
+    let mut row = gpui::div().flex().items_center().gap_3().py_1();
+    for (mode, label) in [
+        (PrintMode::Bw, "Blanco y negro"),
+        (PrintMode::Color, "Color"),
+    ] {
+        let selected = job.print_mode == mode;
+        let assigned = st.role_printer(mode).map(str::to_string);
+        let (printer, job_id) = (job.printer.clone(), job.job_id);
+        let box_color = if selected { GOOD } else { MUTED };
+        let text_color = if selected { INK } else { MUTED };
+        row =
+            row.child(
+                gpui::div()
+                    .id(("mode", mode as u8 as usize))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .cursor_pointer()
+                    .px_3()
+                    .py_1()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(box_color))
+                    .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                        update_state(&this.state, cx, |s, cx| {
+                            s.set_print_mode(cx, printer.clone(), job_id, mode)
+                        });
+                    }))
+                    .child(
+                        gpui::div()
+                            .w_3()
+                            .h_3()
+                            .rounded_sm()
+                            .border_1()
+                            .border_color(rgb(box_color))
+                            .bg(if selected { rgb(GOOD) } else { rgb(PAPER) }),
+                    )
+                    .child(gpui::div().text_sm().text_color(rgb(text_color)).child(
+                        match &assigned {
+                            Some(name) => format!("{label} · {name}"),
+                            None => format!("{label} · sin impresora asignada"),
+                        },
+                    )),
+            );
+    }
+    row
+}
+
+/// Print presets: what the agent may change on a job it re-renders. Applying
+/// one cancels the held job and reprints, because the Windows driver's own
+/// settings (media type, thickness, tray) cannot be rewritten in place.
+fn options_picker(job: &JobView, st: &UiState, cx: &Context<RootView>) -> impl IntoElement {
+    let mut row = gpui::div().flex().flex_wrap().items_center().gap_2();
+    row = row.child(
+        gpui::div()
+            .text_sm()
+            .text_color(rgb(MUTED))
+            .child("Ajustes:".to_string()),
+    );
+    row = row.child(preset_button(
+        job,
+        st,
+        None,
+        "Sin ajustes (usa los del driver)",
+        cx,
+    ));
+    for preset in &st.presets {
+        row = row.child(preset_button(
+            job,
+            st,
+            Some(preset.name.clone()),
+            &format!("{} · {}", preset.name, preset.options.label()),
+            cx,
+        ));
+    }
+    if st.presets.is_empty() {
+        row = row.child(
+            gpui::div()
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .child("sin presets: `mpa presets add --name ... --paper a4`".to_string()),
+        );
+    }
+    row
+}
+
+fn preset_button(
+    job: &JobView,
+    st: &UiState,
+    preset: Option<String>,
+    label: &str,
+    cx: &Context<RootView>,
+) -> impl IntoElement {
+    let printer = job.printer.clone();
+    let job_id = job.job_id;
+    let chosen = preset.clone();
+    let label = label.to_string();
+    let active = job.preset == preset;
+    let _ = st;
+    gpui::div()
+        .id(SharedString::from(format!(
+            "preset-{printer}-{job_id}-{label}"
+        )))
+        .cursor_pointer()
+        .px_3()
+        .py_1()
+        .rounded_md()
+        .border_1()
+        .border_color(rgb(if active { ACCENT } else { LINE }))
+        .bg(rgb(if active { 0xeff6ff } else { PAPER }))
+        .text_sm()
+        .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+            update_state(&this.state, cx, |s, cx| {
+                s.set_preset(cx, printer.clone(), job_id, chosen.clone())
+            });
+        }))
+        .child(label)
+}
+
+/// What applying the chosen preset will do, spelled out for the operator.
+fn options_summary(job: &JobView, st: &UiState) -> Option<impl IntoElement> {
+    let name = job.preset.as_ref()?;
+    let label = st.preset_label(name)?;
+    Some(gpui::div().text_xs().text_color(rgb(MUTED)).child(format!(
+        "Se cancelará el trabajo retenido y se reimprimirá con: {label}. \
+                 El tipo y grosor de papel, la bandeja y el ahorro de tóner se configuran \
+                 en las preferencias del driver de Windows."
+    )))
+}
+
 fn summary_line(job: &JobView) -> impl IntoElement {
     let parts: Vec<String> = job
         .tier_counts()
@@ -473,37 +686,123 @@ fn target_picker(
     st: &UiState,
     cx: &Context<RootView>,
 ) -> impl IntoElement {
-    let mut row = gpui::div().flex().flex_wrap().items_center().gap_2();
-    row = row.child(
+    // The operator may have many open tickets; show the most recent ones and
+    // say how many were left out instead of wrapping into a wall of buttons.
+    // Typing in the filter narrows the list to the tickets that match.
+    const MAX_TICKETS: usize = 8;
+    let filtered = st.filtered_tickets();
+    let mut row = gpui::div().flex().flex_col().gap_2();
+    row = row.child(ticket_filter_field(view, st, cx));
+    let mut buttons = gpui::div().flex().flex_wrap().items_center().gap_2();
+    buttons = buttons.child(
         gpui::div()
             .text_sm()
             .text_color(rgb(MUTED))
             .child("Destino:".to_string()),
     );
-    row = row.child(target_button(
+    buttons = buttons.child(target_button(
         view,
         job,
         &TargetSelection::Unassigned,
         "Sin asignar",
         cx,
     ));
-    for ticket in &st.tickets {
-        row = row.child(target_button(
+    for ticket in filtered.iter().take(MAX_TICKETS) {
+        buttons = buttons.child(target_button(
             view,
             job,
             &TargetSelection::Ticket(ticket.id.clone()),
-            &format!("#{0} ({1})", ticket.ticket_number, ticket.cashier),
+            &format!(
+                "#{} · {} · ${:.2}",
+                ticket.ticket_number, ticket.cashier, ticket.total
+            ),
             cx,
         ));
     }
-    row = row.child(target_button(
+    if filtered.len() > MAX_TICKETS {
+        buttons = buttons.child(gpui::div().text_xs().text_color(rgb(MUTED)).child(format!(
+            "+{} ticket(s) más en MyPaper: usa el buscador",
+            filtered.len() - MAX_TICKETS
+        )));
+    }
+    if filtered.is_empty() {
+        buttons = buttons.child(gpui::div().text_xs().text_color(rgb(WARN)).child(format!(
+            "ningún ticket abierto coincide con \"{}\"",
+            st.ticket_filter
+        )));
+    }
+    buttons = buttons.child(target_button(
         view,
         job,
         &TargetSelection::NewDraft,
         "Nuevo borrador",
         cx,
     ));
-    row
+    row.child(buttons)
+}
+
+/// Which ticket the analysis will land on, and whether that ticket already
+/// received one from this PC (a second analysis is a second charge).
+fn target_summary(job: &JobView, st: &UiState) -> Option<impl IntoElement> {
+    let TargetSelection::Ticket(id) = &job.target else {
+        return None;
+    };
+    let ticket = st.tickets.iter().find(|t| &t.id == id)?;
+    let already = st
+        .outbox_targets
+        .iter()
+        .filter(|t| matches!(t, TargetSelection::Ticket(other) if other == id))
+        .count();
+    let mut row = gpui::div().flex().items_center().gap_2().py_1();
+    row = row.child(gpui::div().text_sm().text_color(rgb(INK)).child(format!(
+        "Análisis para el ticket #{} ({}) · ${:.2}",
+        ticket.ticket_number, ticket.cashier, ticket.total
+    )));
+    if already > 0 {
+        row = row.child(gpui::div().text_xs().text_color(rgb(WARN)).child(format!(
+            "ya se enviaron {already} análisis a este ticket: verifica antes de cobrar dos veces"
+        )));
+    }
+    Some(row)
+}
+
+/// Free-text filter over the open tickets (number or cashier). gpui has no text
+/// field primitive, so this is a focusable div that reads keystrokes: click it
+/// and type; Escape clears.
+fn ticket_filter_field(view: &RootView, st: &UiState, cx: &Context<RootView>) -> impl IntoElement {
+    let empty = st.ticket_filter.is_empty();
+    gpui::div()
+        .id("ticket-filter")
+        .track_focus(&view.ticket_filter_focus)
+        .cursor_text()
+        .px_3()
+        .py_1()
+        .rounded_md()
+        .border_1()
+        .border_color(rgb(if empty { LINE } else { ACCENT }))
+        .bg(rgb(WASH))
+        .text_sm()
+        .min_w(px(260.0))
+        .on_click(cx.listener(move |this, _e: &ClickEvent, window, _cx| {
+            // gpui 0.2: `Window::focus(&handle)` (no cx).
+            window.focus(&this.ticket_filter_focus);
+        }))
+        .on_key_down(cx.listener(|this, event: &KeyDownEvent, _w, cx| {
+            let key = event.keystroke.key.clone();
+            let ch = event.keystroke.key_char.clone();
+            update_state(&this.state, cx, |s, cx| {
+                s.ticket_filter_key(cx, &key, ch.as_deref())
+            });
+        }))
+        .child(if empty {
+            gpui::div()
+                .text_color(rgb(MUTED))
+                .child("Buscar ticket: número o cajero…".to_string())
+        } else {
+            gpui::div()
+                .text_color(rgb(INK))
+                .child(format!("{}▌", st.ticket_filter))
+        })
 }
 
 fn target_button(

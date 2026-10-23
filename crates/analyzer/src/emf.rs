@@ -215,7 +215,9 @@ pub fn rasterize_page(
         // BGRA → RGBA straight copy from the top-down DIB.
         let raw = std::slice::from_raw_parts(bits as *const u8, (w_px * h_px * 4) as usize);
         let mut rgba = Vec::with_capacity(raw.len());
-        for px in raw.chunks_exact(4) {
+        // `as_chunks` keeps the same semantics as `chunks_exact(4)`: the tail
+        // (a partial pixel) is dropped.
+        for px in raw.as_chunks::<4>().0 {
             rgba.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
         }
         RgbaImage::from_raw(w_px, h_px, rgba)

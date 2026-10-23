@@ -12,6 +12,17 @@ struct PersistedState {
     mode: AgentMode,
     #[serde(default)]
     tiers: Vec<Tier>,
+    /// Billing metrics per mode; missing in states written before Fase 8, which
+    /// fall back to the per-mode defaults.
+    #[serde(default)]
+    metrics: mpa_domain::MetricsByMode,
+    /// Fase 6 billing rules; missing in states written before then, which fall
+    /// back to the historical behaviour (greys are color, nothing free).
+    #[serde(default)]
+    pricing: mpa_domain::PrintPricing,
+    /// Tier prices from the last sync; missing in older states.
+    #[serde(default)]
+    tier_prices: std::collections::HashMap<String, f32>,
     #[serde(default)]
     outbox: Vec<OutboxEntry>,
 }
@@ -27,6 +38,9 @@ pub fn save_to(core: &AgentCore, path: &PathBuf) -> std::io::Result<()> {
     let state = PersistedState {
         mode: core.mode(),
         tiers: core.tiers().to_vec(),
+        metrics: core.metrics(),
+        pricing: core.pricing(),
+        tier_prices: core.tier_prices(),
         outbox: core.outbox().to_vec(),
     };
     if let Some(parent) = path.parent() {
@@ -55,6 +69,9 @@ pub fn load_into(core: &mut AgentCore, path: &PathBuf) -> std::io::Result<()> {
     if !state.tiers.is_empty() {
         core.set_tiers(state.tiers);
     }
+    core.set_metrics(state.metrics);
+    core.set_pricing(state.pricing);
+    core.set_tier_prices(state.tier_prices);
     core.set_outbox(state.outbox);
     Ok(())
 }
@@ -78,6 +95,7 @@ mod tests {
             std::sync::Arc::new(crate::tickets::MockTickets::demo()),
             vec![mpa_domain::Tier {
                 id: "t6".into(),
+                mode: mpa_domain::PrintMode::Color,
                 min_coverage: 0.0,
                 max_coverage: 50.0,
                 active: true,
@@ -97,6 +115,10 @@ mod tests {
             }],
             format: Some(mpa_analyzer::SpoolFormat::Image),
             spool_path: None,
+            mode: mpa_domain::PrintMode::Bw,
+            deliver_printer: None,
+            options: None,
+            applied_settings: None,
             reprint_pending: false,
             synced: true,
             remote_id: Some("job-1".into()),

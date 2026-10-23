@@ -3,7 +3,7 @@ use crate::tickets::{Ticket, TicketError, TicketSource};
 use mpa_analyzer::{
     analyze_bytes, capture_spool_file, AnalyzeError, CaptureError, Ghostscript, SpoolFormat,
 };
-use mpa_domain::{classify_coverage, transition, Coverage, JobEvent, JobState, Tier};
+use mpa_domain::{transition, Coverage, JobEvent, JobState, PrintMode, Tier};
 use mpa_spool::{SpoolBackend, SpoolError};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -28,7 +28,7 @@ pub enum AgentError {
     NothingIncluded,
     #[error("job has no analysis yet")]
     NoAnalysis,
-    #[error("partial completion needs a PDF/PS job, got {0:?}")]
+    #[error("no se pudo preparar la reimpresión: se necesita un trabajo PDF/PS y este es {0:?}")]
     SubsetUnsupported(SpoolFormat),
 }
 
@@ -73,6 +73,13 @@ pub struct WatchedJob {
     pub target: TargetSelection,
     pub format: Option<SpoolFormat>,
     pub spool_path: Option<PathBuf>,
+    /// Rule set the operator chose for this job (the checkbox in the UI).
+    /// Drives which printer role receives it and how the draft is priced.
+    pub print_mode: PrintMode,
+    /// Print preset the operator chose (Fase 4). `Some` forces the cancel +
+    /// reprint path: the held job carries the driver's own settings and they
+    /// cannot be changed in place.
+    pub preset: Option<String>,
 }
 
 /// Outcome of intercepting a job (see `detect_and_pause`).
@@ -293,6 +300,23 @@ pub struct OutboxEntry {
     pub pages: Vec<OutboxPage>,
     pub format: Option<SpoolFormat>,
     pub spool_path: Option<PathBuf>,
+    /// Rule set the operator picked; MyPaper prices the draft with it.
+    #[serde(default)]
+    pub mode: PrintMode,
+    /// Printer role the pages must come out of. `None` = the printer that
+    /// received the original job. A different printer forces the cancel +
+    /// reprint path even when every page is included.
+    #[serde(default)]
+    pub deliver_printer: Option<String>,
+    /// Print options to apply while reprinting (Fase 4). Snapshot of the chosen
+    /// preset, so editing `config.toml` later cannot change a queued job.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options: Option<mpa_domain::PrintOptions>,
+    /// Settings the spooler confirmed on the held job (read back from its
+    /// DEVMODE). Present when the preset was applied in place, so the job was
+    /// NOT cancelled or reprinted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_settings: Option<mpa_spool::JobSettings>,
     /// Partial completion cancels the held job; the subset must be reprinted
     /// from the cached spool bytes.
     pub reprint_pending: bool,
@@ -323,6 +347,21 @@ pub struct AgentCore {
     tickets_cache: Vec<Ticket>,
     mode: AgentMode,
     tiers: Vec<Tier>,
+    /// Billing metric per mode, synced from MyPaper. Only used to label pages
+    /// locally: prices are always resolved server-side.
+    metrics: mpa_domain::MetricsByMode,
+    /// Whether the last call to MyPaper succeeded. Drives the link indicator;
+    /// a paired agent refreshes it on every ticket poll (15 s).
+    link_ok: bool,
+    /// Mono / color printer roles (from `config.toml`).
+    roles: mpa_domain::PrinterRoles,
+    /// Print presets (from `config.toml`).
+    presets: Vec<mpa_domain::PrintPreset>,
+    /// Fase 6 billing rules, synced from MyPaper.
+    pricing: mpa_domain::PrintPricing,
+    /// Tier id → price, synced from MyPaper. Empty until the first sync, and
+    /// only used to label pages locally: the server is authoritative.
+    tier_prices: HashMap<String, f32>,
     jobs: HashMap<(String, u32), WatchedJob>,
     outbox: Vec<OutboxEntry>,
     pending_notice: Option<String>,
@@ -355,6 +394,12 @@ impl AgentCore {
             tickets_cache: Vec::new(),
             mode: AgentMode::Active,
             tiers,
+            metrics: mpa_domain::MetricsByMode::default(),
+            link_ok: false,
+            roles: mpa_domain::PrinterRoles::default(),
+            presets: Vec::new(),
+            pricing: mpa_domain::PrintPricing::default(),
+            tier_prices: HashMap::new(),
             jobs: HashMap::new(),
             outbox: Vec::new(),
             pending_notice: None,
@@ -407,6 +452,111 @@ impl AgentCore {
 
     pub fn mode(&self) -> AgentMode {
         self.mode
+    }
+
+    /// Billing metric per mode (synced from MyPaper).
+    pub fn metrics(&self) -> mpa_domain::MetricsByMode {
+        self.metrics
+    }
+
+    /// Mono / color printer roles from `config.toml`.
+    pub fn roles(&self) -> mpa_domain::PrinterRoles {
+        self.roles.clone()
+    }
+
+    pub fn set_roles(&mut self, roles: mpa_domain::PrinterRoles) {
+        if self.roles != roles {
+            self.roles = roles;
+            self.bump();
+        }
+    }
+
+    /// Tier prices from the last sync, used only for the local label.
+    pub fn tier_prices(&self) -> HashMap<String, f32> {
+        self.tier_prices.clone()
+    }
+
+    pub fn set_tier_prices(&mut self, prices: HashMap<String, f32>) {
+        if self.tier_prices != prices {
+            self.tier_prices = prices;
+            self.bump();
+        }
+    }
+
+    /// Fase 6 billing rules (intensity, greys, blank pages, paper, volume).
+    pub fn pricing(&self) -> mpa_domain::PrintPricing {
+        self.pricing.clone()
+    }
+
+    pub fn set_pricing(&mut self, pricing: mpa_domain::PrintPricing) {
+        if self.pricing != pricing {
+            self.pricing = pricing;
+            self.bump();
+        }
+    }
+
+    /// Print presets from `config.toml` (Fase 4).
+    pub fn presets(&self) -> Vec<mpa_domain::PrintPreset> {
+        self.presets.clone()
+    }
+
+    pub fn set_presets(&mut self, presets: Vec<mpa_domain::PrintPreset>) {
+        if self.presets != presets {
+            self.presets = presets;
+            self.bump();
+        }
+    }
+
+    /// Operator's print preset for a job, or `None` to keep the driver's own
+    /// settings. An unknown name is stored as-is and simply resolves to no
+    /// options at completion, so a stale UI selection cannot print a surprise.
+    pub fn set_preset(
+        &mut self,
+        printer: &str,
+        job_id: u32,
+        preset: Option<String>,
+    ) -> Result<(), AgentError> {
+        let job = self.job_mut(printer, job_id)?;
+        if job.preset != preset {
+            job.preset = preset;
+            self.bump();
+        }
+        Ok(())
+    }
+
+    /// Operator's B/N or Color choice for a job (the checkbox in the UI).
+    pub fn set_print_mode(
+        &mut self,
+        printer: &str,
+        job_id: u32,
+        mode: PrintMode,
+    ) -> Result<(), AgentError> {
+        let job = self.job_mut(printer, job_id)?;
+        if job.print_mode != mode {
+            job.print_mode = mode;
+            self.bump();
+        }
+        Ok(())
+    }
+
+    /// Link state as of the last call to MyPaper. The UI and the tray show it;
+    /// it is not persisted because it describes the live connection.
+    pub fn link_ok(&self) -> bool {
+        self.link_ok
+    }
+
+    pub fn set_link_status(&mut self, ok: bool) {
+        if self.link_ok != ok {
+            self.link_ok = ok;
+            self.bump();
+        }
+    }
+
+    pub fn set_metrics(&mut self, metrics: mpa_domain::MetricsByMode) {
+        if self.metrics != metrics {
+            self.metrics = metrics;
+            self.bump();
+        }
     }
 
     /// Shared spooler handle, so background workers can call blocking spooler
@@ -625,6 +775,9 @@ impl AgentCore {
                         target: TargetSelection::Unassigned,
                         format: None,
                         spool_path: None,
+                        // Black and white is the default, per the operator spec.
+                        print_mode: PrintMode::Bw,
+                        preset: None,
                     },
                 );
                 self.bump();
@@ -676,6 +829,10 @@ impl AgentCore {
             }
         };
         let tiers = self.tiers.clone();
+        let metrics = self.metrics;
+        let pricing = self.pricing.clone();
+        // Cloned up front: the labeling runs while `job_mut` borrows self.
+        let prices = self.tier_prices.clone();
         let job = self.job_mut(printer, job_id)?;
         job.analysis_error = None;
         job.format = Some(analyzed.format);
@@ -684,11 +841,18 @@ impl AgentCore {
             .pages
             .into_iter()
             .map(|p| {
-                let color = p.coverage.color_coverage();
+                // One tested function decides the label so the agent and the
+                // server agree: Fase 6 rules first, then the dearest rule set.
+                // MyPaper still prices the draft authoritatively.
+                let tier_id =
+                    mpa_domain::dearest_tier(&p.coverage, &tiers, metrics, &pricing, |tier_id| {
+                        prices.get(tier_id).copied()
+                    })
+                    .map(|t| t.id.clone());
                 WatchedPage {
                     page_no: p.page_no,
                     coverage: p.coverage,
-                    tier_id: classify_coverage(color, &tiers).map(|t| t.id.clone()),
+                    tier_id,
                     included: true,
                     thumbnail_png: p.thumbnail_png,
                 }
@@ -748,7 +912,7 @@ impl AgentCore {
     /// `retry_reprint` can run later. The spool job is only cancelled once a
     /// reprint path exists.
     pub fn complete_job(&mut self, printer: &str, job_id: u32) -> Result<Completion, AgentError> {
-        let (all_pages, target, format, spool_path) = {
+        let (all_pages, target, format, spool_path, mode, preset) = {
             let job = self.job_mut(printer, job_id)?;
             if job.state != JobState::Paused {
                 return Err(AgentError::NoAnalysis);
@@ -761,17 +925,53 @@ impl AgentCore {
                 job.target.clone(),
                 job.format,
                 job.spool_path.clone(),
+                job.print_mode,
+                job.preset.clone(),
             )
         };
         if !all_pages.iter().any(|p| p.included) {
             return Err(AgentError::NothingIncluded);
         }
+        // The role's printer decides the destination: a different printer means
+        // the held job cannot be resumed, so the pages are cancelled and
+        // reprinted there (the physical printer is already configured for that
+        // ink; the agent only routes).
+        let deliver_printer = self.roles.for_mode(mode).map(str::to_string);
+        let reroute = deliver_printer.as_deref().is_some_and(|p| p != printer);
+        // A preset also forces the cancel + reprint path: the held job carries
+        // the Windows driver's own settings and mswinpr2 cannot rewrite them,
+        // so the only way to apply paper size or duplex is to render the
+        // document again through the agent's own pipeline.
+        let options = preset
+            .as_ref()
+            .and_then(|name| self.presets.iter().find(|p| &p.name == name))
+            .map(|p| p.options.clone());
+        // A preset is applied to the HELD job whenever the spooler can keep it
+        // in the job's DEVMODE (paper size, media type / paper thickness,
+        // duplex): nothing is cancelled and nothing is reprinted. Backends
+        // without DEVMODE support (the in-memory mock, or a driver that
+        // refuses) fall back to the reprint path below.
+        let mut applied: Option<mpa_spool::JobSettings> = None;
+        if let Some(options) = &options {
+            let settings = mpa_spool::JobSettings::from(options);
+            match self.backend.apply_job_settings(printer, job_id, &settings) {
+                // The spooler's answer decides: a driver may accept the call and
+                // keep the old values, and then the reprint path is the only one
+                // that can honour the preset.
+                Ok(read_back) if read_back.satisfies(&settings) => applied = Some(read_back),
+                Ok(_) => {}
+                Err(SpoolError::Unsupported(_)) => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
         let partial = all_pages.iter().any(|p| !p.included);
+        // Only a preset the spooler could NOT take still needs a reprint.
+        let needs_reprint = partial || reroute || (options.is_some() && applied.is_none());
         // Pre-flight: only formats with a normalization path may cancel the
         // original. Anything else fails here, before touching the spooler —
         // conversion problems at runtime (missing GhostPCL, no GDI) keep the
         // entry pending instead, via `attempt_reprint`.
-        if partial
+        if needs_reprint
             && !matches!(
                 format,
                 Some(
@@ -788,7 +988,7 @@ impl AgentCore {
             ));
         }
 
-        let completion = if partial {
+        let completion = if needs_reprint {
             self.release_spooled_job(printer, job_id, true)?;
             Completion::CancelledPartial
         } else {
@@ -813,7 +1013,11 @@ impl AgentCore {
                 .collect(),
             format,
             spool_path,
-            reprint_pending: completion == Completion::CancelledPartial,
+            mode,
+            deliver_printer,
+            options,
+            applied_settings: applied,
+            reprint_pending: needs_reprint,
             synced: false,
             materialized: false,
             remote_id: None,
@@ -896,6 +1100,19 @@ mod tests {
     fn tier(id: &str, min: f32, max: f32) -> Tier {
         Tier {
             id: id.into(),
+            mode: PrintMode::Color,
+            min_coverage: min,
+            max_coverage: max,
+            active: true,
+        }
+    }
+
+    /// Mono rule set: the analyzed fixtures are black-only pages, so they bill
+    /// through this set instead of the color one.
+    fn bw_tier(id: &str, min: f32, max: f32) -> Tier {
+        Tier {
+            id: id.into(),
+            mode: PrintMode::Bw,
             min_coverage: min,
             max_coverage: max,
             active: true,
@@ -907,7 +1124,11 @@ mod tests {
         AgentCore::new(
             backend,
             Arc::new(MockTickets::demo()),
-            vec![tier("t6", 0.0, 50.0), tier("t10", 50.01, 90.0)],
+            vec![
+                bw_tier("bw-100", 0.0, 100.0),
+                tier("t6", 0.0, 50.0),
+                tier("t10", 50.01, 90.0),
+            ],
         )
     }
 
@@ -1037,20 +1258,27 @@ mod tests {
         assert_eq!(jobs[0].warnings.len(), 1);
     }
 
+    // Windows has no demo capture: the real spool path needs a job that
+    // actually exists on a printer, so these run on the CI host (Linux).
+    #[cfg(not(windows))]
     #[test]
     fn detect_pause_analyze_full_flow() {
         let mut core = core();
         core.detect_and_pause("Mock-LaserJet", 41).unwrap();
-        // Mock capture returns the white+1px fixture → analyzed, tier t6.
+        // Mock capture returns the white+1px fixture → analyzed. It carries no
+        // color ink, so it labels through the mono rule set.
         core.analyze_job("Mock-LaserJet", 41).unwrap();
         let jobs = core.snapshot();
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].state, JobState::Paused);
         assert_eq!(jobs[0].pages.len(), 1);
-        assert_eq!(jobs[0].pages[0].tier_id.as_deref(), Some("t6"));
+        assert_eq!(jobs[0].pages[0].tier_id.as_deref(), Some("bw-100"));
         assert!(jobs[0].analysis_error.is_none());
     }
 
+    // Windows has no demo capture: the real spool path needs a job that
+    // actually exists on a printer, so these run on the CI host (Linux).
+    #[cfg(not(windows))]
     #[test]
     fn toggle_select_complete_resumes_and_records_outbox() {
         let mut core = core();
@@ -1076,6 +1304,9 @@ mod tests {
     /// A job the spooler already dropped must still record its draft: the
     /// analysis is the billable record and the queue forgets jobs (printer
     /// restarted, Purge, virtual printer that consumed it).
+    // Windows has no demo capture: the real spool path needs a job that
+    // actually exists on a printer, so these run on the CI host (Linux).
+    #[cfg(not(windows))]
     #[test]
     fn completion_survives_a_job_the_spooler_already_dropped() {
         let backend = Arc::new(MockSpool::with_demo_jobs());
@@ -1105,6 +1336,9 @@ mod tests {
         );
     }
 
+    // Windows has no demo capture: the real spool path needs a job that
+    // actually exists on a printer, so these run on the CI host (Linux).
+    #[cfg(not(windows))]
     #[test]
     fn excluded_pages_make_completion_partial() {
         let mut core = core();

@@ -62,6 +62,7 @@ impl SpoolBackend for HeldJobBackend {
 fn tiers() -> Vec<Tier> {
     vec![Tier {
         id: "t6".into(),
+        mode: mpa_domain::PrintMode::Color,
         min_coverage: 0.0,
         max_coverage: 100.0,
         active: true,

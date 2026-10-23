@@ -45,6 +45,8 @@ fn seed_demo_job(core: &mut AgentCore) {
         target: mpa_agent::TargetSelection::Unassigned,
         format: None,
         spool_path: None,
+        print_mode: mpa_domain::PrintMode::Bw,
+        preset: None,
     });
 }
 
@@ -78,6 +80,10 @@ fn main() {
         None => default_state_path().unwrap_or_else(|_| cfg_path.clone()),
     };
     let _ = load_into(&mut core, &state_path);
+    // Mono / color roles and print presets live in config.toml: they describe
+    // the installation, not the runtime state.
+    core.set_roles(mpa_agent::load_roles(&cfg_path));
+    core.set_presets(mpa_agent::load_presets(&cfg_path));
 
     // Layout/dev aid: seed one held, already-analyzed job so the detail pane can
     // be inspected without sending anything to a printer. `MPA_DEMO_PAGE` is a
@@ -217,7 +223,7 @@ fn main() {
                     }
                 })
                 .detach();
-                cx.new(|_| RootView::new(state))
+                cx.new(|cx| RootView::new(state, cx.focus_handle()))
             },
         )
         .expect("open window");
