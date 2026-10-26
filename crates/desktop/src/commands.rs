@@ -132,6 +132,26 @@ pub fn complete_job(
     job_id: u32,
 ) -> Result<(), String> {
     let mut core = lock(&state.core)?;
+    // A captured job has no held spooler job to release: the operator's
+    // authorisation is what queues the print.
+    if printer == mpa_agent::CAPTURE_PRINTER {
+        let mode = core
+            .snapshot()
+            .into_iter()
+            .find(|j| j.printer == printer && j.job_id == job_id)
+            .map(|j| j.print_mode)
+            .unwrap_or_default();
+        let target = core
+            .snapshot()
+            .into_iter()
+            .find(|j| j.printer == printer && j.job_id == job_id)
+            .map(|j| j.target)
+            .unwrap_or(mpa_agent::TargetSelection::Unassigned);
+        return core
+            .authorize_captured(&printer, job_id, mode, target)
+            .map(|_| ())
+            .map_err(|e| e.to_string());
+    }
     core.complete_job(&printer, job_id)
         .map(|_| ())
         .map_err(|e| e.to_string())
@@ -142,6 +162,60 @@ pub fn complete_job(
 pub fn cancel_job(state: State<'_, AppState>, printer: String, job_id: u32) -> Result<(), String> {
     let mut core = lock(&state.core)?;
     core.cancel_job(&printer, job_id).map_err(|e| e.to_string())
+}
+
+/// What both rule sets would cost for this job's included pages.
+///
+/// The price always comes from the server: a local guess would drift from what
+/// the ticket charges, and the operator reads this number to decide.
+#[tauri::command]
+pub fn quote(
+    state: State<'_, AppState>,
+    printer: String,
+    job_id: u32,
+) -> Result<crate::dto::QuoteDto, String> {
+    let core = lock(&state.core)?;
+    let pages = core
+        .snapshot()
+        .into_iter()
+        .find(|j| j.printer == printer && j.job_id == job_id)
+        .map(|j| j.pages)
+        .ok_or_else(|| "trabajo no encontrado".to_string())?;
+    drop(core);
+
+    let pairing = mpa_sync::PairingStore::load(None).map_err(|e| e.to_string())?;
+    let client = mpa_sync::SyncClient::new(&pairing.server_url, Some(pairing.agent_key))
+        .map_err(|e| e.to_string())?;
+    let request: Vec<mpa_sync::QuotePage> = pages
+        .iter()
+        .map(|p| mpa_sync::QuotePage {
+            page_no: p.page_no,
+            c: p.coverage.c,
+            m: p.coverage.m,
+            y: p.coverage.y,
+            k: p.coverage.k,
+            include: p.included,
+        })
+        .collect();
+    let quote = client.quote(&request).map_err(|e| e.to_string())?;
+    Ok(crate::dto::QuoteDto {
+        bw: mode_quote(quote.for_mode(mpa_domain::PrintMode::Bw)),
+        color: mode_quote(quote.for_mode(mpa_domain::PrintMode::Color)),
+    })
+}
+
+fn mode_quote(mode: &mpa_sync::QuoteMode) -> crate::dto::ModeQuoteDto {
+    crate::dto::ModeQuoteDto {
+        total: mode.total,
+        pages: mode
+            .lines
+            .iter()
+            .map(|line| crate::dto::PageQuoteDto {
+                page_no: line.page_no,
+                unit_price: line.unit_price,
+            })
+            .collect(),
+    }
 }
 
 /// The same checks `mpa doctor` runs, for the window's status panel.

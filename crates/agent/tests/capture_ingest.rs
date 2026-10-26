@@ -152,3 +152,82 @@ fn a_printed_document_appears_in_the_window_measured() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn authorising_queues_the_print_and_releases_the_job() {
+    let dir = std::env::temp_dir().join(format!("mpa-authorize-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("dir");
+    let path = dir.join("captured.png");
+    let document = include_bytes!("fixtures/capture.png");
+    std::fs::write(&path, document).expect("write");
+
+    let core = Arc::new(Mutex::new(AgentCore::new(
+        Arc::new(NoPrinters) as Arc<dyn SpoolBackend>,
+        Arc::new(MockTickets::demo()),
+        tiers(),
+    )));
+    {
+        let mut core = core.lock().expect("core");
+        core.set_roles(mpa_domain::PrinterRoles {
+            bw: Some("BW-Print".into()),
+            color: Some("Color-Print".into()),
+        });
+        core.ingest_captured(
+            mpa_agent::CAPTURE_PRINTER,
+            1,
+            "cotizacion.png".into(),
+            document,
+            Some(path.clone()),
+        )
+        .expect("ingested");
+    }
+
+    // The operator picks colour and a ticket: price follows the rule set, and
+    // the pages must go out of the colour printer.
+    {
+        let mut core = core.lock().expect("core");
+        core.authorize_captured(
+            mpa_agent::CAPTURE_PRINTER,
+            1,
+            mpa_domain::PrintMode::Color,
+            mpa_agent::TargetSelection::Ticket("ticket-1".into()),
+        )
+        .expect("authorized");
+    }
+
+    let guard = core.lock().expect("core");
+    let jobs = guard.snapshot();
+    let job = jobs
+        .iter()
+        .find(|j| j.printer == mpa_agent::CAPTURE_PRINTER)
+        .expect("job");
+    assert_eq!(job.state, mpa_domain::JobState::Released);
+    assert_eq!(job.print_mode, mpa_domain::PrintMode::Color);
+
+    let entry = guard
+        .outbox()
+        .last()
+        .expect("queued for printing and billing");
+    assert!(entry.reprint_pending, "a captured job is printed by us");
+    assert_eq!(entry.deliver_printer.as_deref(), Some("Color-Print"));
+    assert_eq!(entry.mode, mpa_domain::PrintMode::Color);
+    assert!(entry.spool_path.is_some(), "the document to print");
+    assert!(matches!(
+        entry.target,
+        mpa_agent::TargetSelection::Ticket(_)
+    ));
+
+    // Authorising twice would charge twice.
+    drop(guard);
+    let mut core = core.lock().expect("core");
+    assert!(core
+        .authorize_captured(
+            mpa_agent::CAPTURE_PRINTER,
+            1,
+            mpa_domain::PrintMode::Bw,
+            mpa_agent::TargetSelection::Unassigned,
+        )
+        .is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}

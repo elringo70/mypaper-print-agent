@@ -131,6 +131,7 @@ fn main() {
             commands::select_target,
             commands::set_preset,
             commands::set_print_mode,
+            commands::quote,
             commands::doctor,
         ])
         .setup(|app| {

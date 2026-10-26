@@ -45,6 +45,22 @@ export interface AppSnapshot {
 	presets: string[];
 }
 
+export interface PageQuoteDto {
+	pageNo: number;
+	unitPrice: number;
+}
+
+export interface ModeQuoteDto {
+	total: number;
+	pages: PageQuoteDto[];
+}
+
+/** Both rule sets, so flipping B/N ↔ Color never waits on a round trip. */
+export interface QuoteDto {
+	bw: ModeQuoteDto;
+	color: ModeQuoteDto;
+}
+
 export interface CheckDto {
 	name: string;
 	health: 'ok' | 'warn' | 'fail';
@@ -62,6 +78,7 @@ export const api = {
 	complete: (printer: string, jobId: number) =>
 		invoke<void>('complete_job', { printer, jobId }),
 	cancel: (printer: string, jobId: number) => invoke<void>('cancel_job', { printer, jobId }),
+	quote: (printer: string, jobId: number) => invoke<QuoteDto>('quote', { printer, jobId }),
 	selectTarget: (
 		printer: string,
 		jobId: number,

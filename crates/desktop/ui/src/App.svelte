@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { api, type AppSnapshot, type JobDto, type CheckDto } from './lib/api';
+	import { api, type AppSnapshot, type JobDto, type CheckDto, type QuoteDto } from './lib/api';
 
 	let snapshot = $state<AppSnapshot | null>(null);
 	let selected = $state<string | null>(null);
@@ -89,6 +89,74 @@
 		}
 	}
 
+	/**
+	 * Price per job and rule set, keyed by the snapshot version so any change
+	 * (mode, pages) refetches instead of showing a stale total. The number
+	 * always comes from the server: a local guess would drift from the ticket.
+	 */
+	let quotes = $state<Record<string, QuoteDto>>({});
+	let quoteError = $state<string | null>(null);
+
+	function quoteKey(job: JobDto) {
+		return `${job.printer}#${job.jobId}#${snapshot?.version ?? 0}`;
+	}
+
+	async function refreshQuote(job: JobDto) {
+		const key = quoteKey(job);
+		if (quotes[key]) return;
+		try {
+			const q = await api.quote(job.printer, job.jobId);
+			quotes = { ...quotes, [key]: q };
+			quoteError = null;
+		} catch (e) {
+			quoteError = String(e);
+		}
+	}
+
+	$effect(() => {
+		const job = current;
+		if (job && job.pages.length > 0) {
+			refreshQuote(job);
+			const base = `${job.printer}#${job.jobId}#`;
+			for (const k of Object.keys(quotes)) {
+				if (k.startsWith(base) && k !== quoteKey(job)) delete quotes[k];
+			}
+		}
+	});
+
+	function quote(job: JobDto) {
+		return quotes[quoteKey(job)] ?? null;
+	}
+
+	function modeTotal(job: JobDto) {
+		const q = quote(job);
+		if (!q) return null;
+		return job.printMode === 'Bw' ? q.bw.total : q.color.total;
+	}
+
+	function pagePrice(job: JobDto, pageNo: number) {
+		const q = quote(job);
+		if (!q) return null;
+		const mode = job.printMode === 'Bw' ? q.bw : q.color;
+		return mode.pages.find((p) => p.pageNo === pageNo)?.unitPrice ?? null;
+	}
+
+	async function selectAll(job: JobDto, on: boolean) {
+		for (const page of job.pages) {
+			if (page.included !== on) await toggle(job, page.pageNo, on);
+		}
+		seen = -1;
+	}
+
+	/** Page whose preview fills the right column: the first included one. */
+	function previewPage(job: JobDto) {
+		return job.pages.find((p) => p.included) ?? job.pages[0] ?? null;
+	}
+
+	function money(n: number | null) {
+		return n === null ? '—' : `$${n.toFixed(2)}`;
+	}
+
 	function included(job: JobDto) {
 		return job.pages.filter((p) => p.included).length;
 	}
@@ -175,19 +243,102 @@
 
 		<section class="detail">
 			{#if current}
-				<div class="detail-head">
-					<h2>{current.document}</h2>
-					<p class="meta">
-						{included(current)} de {current.pages.length} páginas ·
-						{current.format ?? 'formato desconocido'}
-					</p>
-				</div>
+				<header class="head">
+					<div>
+						<h2>{current.document}</h2>
+						<p class="meta">
+							{included(current)} de {current.pages.length} páginas ·
+							{current.format ?? 'formato desconocido'}
+						</p>
+					</div>
+					<!-- El modo decide el juego de reglas y con él el precio; por eso
+					     vive arriba, junto al total, y no escondido entre los ajustes. -->
+					<div class="toggle modes" aria-label="Tipo de impresión">
+						<button
+							class:active={current.printMode === 'Bw'}
+							onclick={() => setMode(current, 'Bw')}>B/N</button
+						>
+						<button
+							class:active={current.printMode === 'Color'}
+							onclick={() => setMode(current, 'Color')}>Color</button
+						>
+					</div>
+				</header>
 
 				{#if current.warnings.length}
 					<ul class="warnings">
 						{#each current.warnings as w}<li>{w}</li>{/each}
 					</ul>
 				{/if}
+
+				<div class="total">
+					<span class="label">Total</span>
+					<strong>{money(modeTotal(current))}</strong>
+					{#if quoteError}
+						<span class="small warn">sin precio: {quoteError}</span>
+					{/if}
+				</div>
+
+				<div class="columns">
+					<div class="tariff">
+						<h3>Detalles de tarifación</h3>
+						<table>
+							<thead>
+								<tr><th>Pág.</th><th>Tarifa</th><th>Costo</th></tr>
+							</thead>
+							<tbody>
+								{#each current.pages as page (page.pageNo)}
+									<tr class:off={!page.included}>
+										<td>
+											<label class="pick">
+												<input
+													type="checkbox"
+													checked={page.included}
+													onchange={(e) => toggle(current, page.pageNo, e.currentTarget.checked)}
+												/>
+												{page.pageNo}
+											</label>
+										</td>
+										<td>
+											<span class="chip">{classLabel(page.class)}</span>
+											<span class="small muted">
+												{page.areaPct !== null ? `${page.areaPct.toFixed(1)}%` : '—'}
+											</span>
+										</td>
+										<td class="cost">{money(pagePrice(current, page.pageNo))}</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+						<label class="pick all">
+							<input
+								type="checkbox"
+								checked={current.pages.length > 0 && included(current) === current.pages.length}
+								onchange={(e) => selectAll(current, e.currentTarget.checked)}
+							/>
+							Seleccionar todas las páginas
+						</label>
+					</div>
+
+					<div class="preview">
+						{#if previewPage(current)}
+							<img src={previewPage(current)?.thumbnail} alt={`Página ${previewPage(current)?.pageNo}`} />
+						{:else}
+							<div class="placeholder">sin vista previa</div>
+						{/if}
+						{#if previewPage(current)}
+							<p class="ink small">
+								Negro: {(previewPage(current)?.k ?? 0).toFixed(2)}% ·
+								Color: {Math.max(
+									previewPage(current)?.c ?? 0,
+									previewPage(current)?.m ?? 0,
+									previewPage(current)?.y ?? 0
+								).toFixed(2)}% ·
+								Blanco: {(100 - (previewPage(current)?.areaPct ?? 0)).toFixed(2)}%
+							</p>
+						{/if}
+					</div>
+				</div>
 
 				<div class="controls">
 					<div class="field">
@@ -209,20 +360,6 @@
 					</div>
 
 					<div class="field">
-						<span class="label">Modo</span>
-						<div class="toggle">
-							<button
-								class:active={current.printMode === 'Bw'}
-								onclick={() => setMode(current, 'Bw')}>B/N</button
-							>
-							<button
-								class:active={current.printMode === 'Color'}
-								onclick={() => setMode(current, 'Color')}>Color</button
-							>
-						</div>
-					</div>
-
-					<div class="field">
 						<span class="label">Preset</span>
 						<select value={current.preset ?? ''} onchange={(e) => setPreset(current, e.currentTarget.value)}>
 							<option value="">Del controlador</option>
@@ -231,35 +368,6 @@
 							{/each}
 						</select>
 					</div>
-				</div>
-
-				<div class="pages">
-					{#each current.pages as page (page.pageNo)}
-						<label class="page" class:off={!page.included}>
-							<input
-								type="checkbox"
-								checked={page.included}
-								onchange={(e) => toggle(current, page.pageNo, e.currentTarget.checked)}
-							/>
-							<div class="thumb">
-								{#if page.thumbnail}
-									<img src={page.thumbnail} alt={`Página ${page.pageNo}`} />
-								{:else}
-									<div class="placeholder">sin vista</div>
-								{/if}
-							</div>
-							<div class="page-meta">
-								<span class="num">{page.pageNo}</span>
-								<span class="chip">{classLabel(page.class)}</span>
-								<span class="small">
-									{page.areaPct !== null ? `${page.areaPct.toFixed(1)}% área` : 'sin área'}
-								</span>
-								<span class="small muted">
-									C{page.c.toFixed(0)} M{page.m.toFixed(0)} Y{page.y.toFixed(0)} K{page.k.toFixed(0)}
-								</span>
-							</div>
-						</label>
-					{/each}
 				</div>
 
 				<footer>
@@ -271,7 +379,7 @@
 						disabled={busy || included(current) === 0}
 						onclick={() => finish(current, 'complete')}
 					>
-						Completar e imprimir
+						Imprimir
 					</button>
 				</footer>
 			{:else}
@@ -282,6 +390,77 @@
 </main>
 
 <style>
+	.head {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: 16px;
+	}
+	.modes button {
+		min-width: 64px;
+	}
+	.total {
+		display: flex;
+		align-items: baseline;
+		gap: 10px;
+		padding: 12px 14px;
+		border-radius: 10px;
+		background: #131a24;
+		border: 1px solid #1f2a38;
+	}
+	.total strong {
+		font-size: 30px;
+		color: #6ee7a8;
+	}
+	.columns {
+		display: grid;
+		grid-template-columns: minmax(260px, 1fr) minmax(220px, 0.8fr);
+		gap: 16px;
+		align-items: start;
+	}
+	.tariff table {
+		width: 100%;
+		border-collapse: collapse;
+	}
+	.tariff th,
+	.tariff td {
+		padding: 6px 8px;
+		text-align: left;
+		border-bottom: 1px solid #1b2431;
+		font-size: 13px;
+	}
+	.tariff tr.off td {
+		opacity: 0.45;
+	}
+	.cost {
+		text-align: right;
+		font-variant-numeric: tabular-nums;
+	}
+	.pick {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+	.pick.all {
+		margin-top: 10px;
+		font-size: 12px;
+		color: #9fb0c6;
+	}
+	.preview {
+		background: #0b0f15;
+		border: 1px solid #1b2431;
+		border-radius: 10px;
+		padding: 10px;
+		text-align: center;
+	}
+	.preview img {
+		max-width: 100%;
+		max-height: 260px;
+		border-radius: 6px;
+	}
+	.ink {
+		margin: 8px 0 0;
+	}
 	:global(html, body) {
 		margin: 0;
 		height: 100%;
@@ -517,11 +696,6 @@
 		overflow: hidden;
 		display: grid;
 		place-items: center;
-	}
-	.thumb img {
-		max-width: 100%;
-		max-height: 100%;
-		object-fit: contain;
 	}
 	.placeholder {
 		color: #99a;

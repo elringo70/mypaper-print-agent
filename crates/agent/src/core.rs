@@ -1136,6 +1136,78 @@ impl AgentCore {
         Ok(completion)
     }
 
+    /// The operator authorised a captured job: choose the rule set and the
+    /// destination, and queue the print.
+    ///
+    /// Unlike `complete_job` there is no held spooler job to cancel or resume —
+    /// Windows already considers it printed. Everything the customer gets is
+    /// reprinted by us, so the entry always goes out with `reprint_pending`.
+    pub fn authorize_captured(
+        &mut self,
+        printer: &str,
+        job_id: u32,
+        mode: PrintMode,
+        target: TargetSelection,
+    ) -> Result<Completion, AgentError> {
+        let (pages, format, spool_path) = {
+            let job = self.job_mut(printer, job_id)?;
+            if job.state != JobState::Paused {
+                // Already authorised once: printing it again would charge twice.
+                return Err(AgentError::NoAnalysis);
+            }
+            if job.pages.is_empty() {
+                return Err(AgentError::NoAnalysis);
+            }
+            job.print_mode = mode;
+            job.target = target.clone();
+            (job.pages.clone(), job.format, job.spool_path.clone())
+        };
+        if !pages.iter().any(|p| p.included) {
+            return Err(AgentError::NothingIncluded);
+        }
+        if spool_path.is_none() {
+            // Without the document nothing can be printed; refuse before the
+            // job leaves the queue.
+            return Err(AgentError::NoAnalysis);
+        }
+        let deliver_printer = self.roles.for_mode(mode).map(str::to_string);
+
+        let entry = OutboxEntry {
+            idempotency_key: format!("{}-{}-{}", printer, job_id, self.version),
+            printer: printer.into(),
+            job_id,
+            target,
+            pages: pages
+                .into_iter()
+                .map(|p| OutboxPage {
+                    page_no: p.page_no,
+                    coverage: p.coverage,
+                    tier_id: p.tier_id,
+                    included: p.included,
+                    area: p.area,
+                })
+                .collect(),
+            format,
+            spool_path,
+            mode,
+            deliver_printer,
+            options: None,
+            applied_settings: None,
+            reprint_pending: true,
+            synced: false,
+            materialized: false,
+            remote_id: None,
+        };
+        {
+            let job = self.job_mut(printer, job_id)?;
+            job.state = transition(job.state, JobEvent::Resumed).expect("paused releases legally");
+        }
+        self.outbox.push(entry);
+        self.bump();
+        crate::audit::record("authorized", printer, Some(job_id), format!("{mode:?}"));
+        Ok(Completion::CancelledPartial)
+    }
+
     /// Cancel or resume the held job in the spooler, tolerating a job the
     /// spooler already dropped.
     ///

@@ -20,6 +20,31 @@ pub struct AppSnapshot {
     pub presets: Vec<String>,
 }
 
+/// Price of one rule set for the selected pages.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModeQuoteDto {
+    pub total: f64,
+    /// Per-page line total, so the list shows a cost next to each page.
+    pub pages: Vec<PageQuoteDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageQuoteDto {
+    pub page_no: u32,
+    pub unit_price: f64,
+}
+
+/// Both rule sets at once: the operator flips between them and the total must
+/// not flicker through a round trip each time.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuoteDto {
+    pub bw: ModeQuoteDto,
+    pub color: ModeQuoteDto,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TicketDto {
