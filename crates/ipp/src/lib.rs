@@ -241,6 +241,13 @@ fn printer_attributes(port: u16) -> Vec<u8> {
         "printer-make-and-model",
         b"MyPaper Print Agent",
     );
+    write_attribute(
+        &mut out,
+        TAG_TEXT,
+        "printer-device-id",
+        b"MFG:MyPaper;MDL:Print Agent;CMD:PDF;",
+    );
+    write_attribute(&mut out, TAG_KEYWORD, "printer-state-reasons", b"none");
     write_attribute(&mut out, TAG_ENUM, "printer-state", &3u32.to_be_bytes()); // idle
     write_attribute(&mut out, TAG_BOOLEAN, "printer-is-accepting-jobs", &[1]);
     write_attribute(&mut out, TAG_BOOLEAN, "color-supported", &[1]);
@@ -566,70 +573,86 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 /// copy shop prints sequentially.
 pub fn serve(listener: TcpListener, out_dir: PathBuf, port: u16) -> Result<(), IppError> {
     let mut next_job: u32 = 1;
+    let mut seen: u32 = 0;
     for stream in listener.incoming() {
         let mut stream = stream?;
-        let request = match read_http_request(&mut stream) {
-            Ok(request) => request,
-            Err(e) => {
-                // A browser probe or a closed tab is not an error worth a stack.
-                println!("ipp: {e}");
-                continue;
-            }
-        };
-
-        if request.method != "POST" {
-            // Opening the URL in a browser is the fastest way to know the
-            // endpoint is alive and reachable from this machine.
-            let text = format!(
-                "MyPaper IPP endpoint\n\nPOST {PRINT_PATH} for print jobs\ndocuments: {}\n",
-                out_dir.display()
-            );
-            write_plain(&mut stream, &text)?;
-            continue;
-        }
-
-        let handled = match handle(&request.body, port, next_job) {
-            Ok(handled) => handled,
-            Err(e) => {
-                println!("ipp: {e}");
-                continue;
-            }
-        };
-        println!(
-            "ipp: op 0x{:04x} ({} bytes) -> {}",
-            handled.operation,
-            request.body.len(),
-            if handled.job.is_some() {
-                "documento"
-            } else {
-                "sin documento"
-            }
-        );
-
-        if let Some(job) = &handled.job {
-            match save_job(&out_dir, job) {
-                Ok(path) => {
-                    println!(
-                        "ipp: guardado {} ({} bytes)",
-                        path.display(),
-                        job.document.len()
-                    );
-                    next_job += 1;
+        // A client may reuse the connection for several operations; keep
+        // reading until it goes quiet, otherwise Windows sees a drop in the
+        // middle of its setup sequence and reports "device not found".
+        let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+        loop {
+            let request = match read_http_request(&mut stream) {
+                Ok(request) => request,
+                Err(e) => {
+                    let text = e.to_string();
+                    if !text.contains("connection closed") && !text.contains("timed out") {
+                        println!("ipp: {text}");
+                    }
+                    break;
                 }
-                Err(e) => println!("ipp: {e}"),
-            }
-        }
+            };
+            seen += 1;
 
-        let mut response = Vec::new();
-        response.extend_from_slice(b"HTTP/1.1 200 OK\r\n");
-        response.extend_from_slice(b"Content-Type: application/ipp\r\n");
-        response.extend_from_slice(
-            format!("Content-Length: {}\r\n", handled.response.len()).as_bytes(),
-        );
-        response.extend_from_slice(b"Connection: close\r\n\r\n");
-        response.extend_from_slice(&handled.response);
-        stream.write_all(&response)?;
-        stream.flush()?;
+            // Everything Windows sends is kept: when the queue refuses to be
+            // added, the raw bodies are the only way to know where it stopped.
+            if request.method == "POST" && !request.body.is_empty() {
+                let dir = out_dir.join("_requests");
+                let _ = std::fs::create_dir_all(&dir);
+                let _ = std::fs::write(dir.join(format!("{seen:03}.bin")), &request.body);
+            }
+
+            if request.method != "POST" {
+                let text = format!(
+                    "MyPaper IPP endpoint\n\nPOST {PRINT_PATH} for print jobs\ndocuments: {}\n",
+                    out_dir.display()
+                );
+                write_plain(&mut stream, &text)?;
+                break;
+            }
+
+            let handled = match handle(&request.body, port, next_job) {
+                Ok(handled) => handled,
+                Err(e) => {
+                    println!("ipp: {e}");
+                    break;
+                }
+            };
+            println!(
+                "ipp: op 0x{:04x} ({} bytes) -> {}",
+                handled.operation,
+                request.body.len(),
+                if handled.job.is_some() {
+                    "documento"
+                } else {
+                    "sin documento"
+                }
+            );
+
+            if let Some(job) = &handled.job {
+                match save_job(&out_dir, job) {
+                    Ok(path) => {
+                        println!(
+                            "ipp: guardado {} ({} bytes)",
+                            path.display(),
+                            job.document.len()
+                        );
+                        next_job += 1;
+                    }
+                    Err(e) => println!("ipp: {e}"),
+                }
+            }
+
+            let mut response = Vec::new();
+            response.extend_from_slice(b"HTTP/1.1 200 OK\r\n");
+            response.extend_from_slice(b"Content-Type: application/ipp\r\n");
+            response.extend_from_slice(
+                format!("Content-Length: {}\r\n", handled.response.len()).as_bytes(),
+            );
+            response.extend_from_slice(b"Connection: keep-alive\r\n\r\n");
+            response.extend_from_slice(&handled.response);
+            stream.write_all(&response)?;
+            stream.flush()?;
+        }
     }
     Ok(())
 }

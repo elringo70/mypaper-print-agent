@@ -44,6 +44,37 @@ fn start(dir: PathBuf) -> (u16, std::thread::JoinHandle<()>) {
     (port, handle)
 }
 
+/// Read exactly one HTTP response: headers, then the body by Content-Length.
+/// `read_to_end` is wrong now that the endpoint keeps the connection open.
+fn read_one_response(stream: &mut TcpStream) -> String {
+    let mut raw = Vec::new();
+    let mut buf = [0u8; 4096];
+    let header_end = loop {
+        let n = stream.read(&mut buf).expect("read");
+        assert!(n > 0, "connection closed before headers");
+        raw.extend_from_slice(&buf[..n]);
+        if let Some(pos) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+            break pos + 4;
+        }
+    };
+    let head = String::from_utf8_lossy(&raw[..header_end]).to_string();
+    let length = head
+        .to_ascii_lowercase()
+        .lines()
+        .find_map(|l| {
+            l.strip_prefix("content-length:")
+                .map(|v| v.trim().to_string())
+        })
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(0);
+    while raw.len() < header_end + length {
+        let n = stream.read(&mut buf).expect("read body");
+        assert!(n > 0, "connection closed before body");
+        raw.extend_from_slice(&buf[..n]);
+    }
+    String::from_utf8_lossy(&raw).to_string()
+}
+
 fn attribute(tag: u8, name: &str, value: &[u8]) -> Vec<u8> {
     let mut out = vec![tag];
     out.extend_from_slice(&(name.len() as u16).to_be_bytes());
@@ -92,9 +123,7 @@ fn a_client_that_waits_for_continue_still_gets_its_document_saved() {
     );
 
     stream.write_all(&body).expect("body");
-    let mut response = Vec::new();
-    stream.read_to_end(&mut response).expect("response");
-    let text = String::from_utf8_lossy(&response);
+    let text = read_one_response(&mut stream);
     assert!(text.starts_with("HTTP/1.1 200"), "got {text:?}");
 
     handle.join().expect("server");
@@ -135,9 +164,8 @@ fn a_chunked_body_arrives_whole() {
     }
     stream.write_all(b"0\r\n\r\n").expect("end");
 
-    let mut response = Vec::new();
-    stream.read_to_end(&mut response).expect("response");
-    assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 200"));
+    let text = read_one_response(&mut stream);
+    assert!(text.starts_with("HTTP/1.1 200"), "got {text:?}");
 
     handle.join().expect("server");
     let saved: Vec<_> = std::fs::read_dir(&dir)
