@@ -408,7 +408,15 @@
 					</button>
 				</footer>
 			{:else}
-				<p class="empty">Selecciona un trabajo para revisar sus páginas.</p>
+				<div class="empty">
+					<p>Selecciona un trabajo para revisar sus páginas.</p>
+					<!-- Lo que no se captura se dice aquí, no se deja a la imaginación. -->
+					<p class="small muted">
+						Sólo se mide lo que llega por la cola <b>MyPaper</b>. Las copias desde el panel de
+						la impresora, lo que se imprime por USB y lo que se manda directo a otra
+						impresora no pasan por el agente.
+					</p>
+				</div>
 			{/if}
 		</section>
 	</div>

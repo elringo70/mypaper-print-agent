@@ -84,7 +84,24 @@ fn main() {
     }
 
     let core = Arc::new(Mutex::new(core));
-    let mut runtime = AgentRuntime::start(Arc::clone(&core), policy, Duration::from_millis(2000));
+    // The spool watcher is retired from the normal flow: it can only ever see
+    // the driver's PCL/PostScript, which cannot be measured. `mpa watch` still
+    // runs it as a diagnostic, and the config can bring it back.
+    let watched_policy = if mpa_agent::config::legacy_spool_watch(None) {
+        policy
+    } else {
+        mpa_agent::log::info("vigilante de spool desactivado: la captura es la cola IPP".into());
+        mpa_domain::PrinterPolicy {
+            mode: mpa_domain::PolicyMode::Allowlist,
+            watched: Vec::new(),
+            ignored: Vec::new(),
+        }
+    };
+    let mut runtime = AgentRuntime::start(
+        Arc::clone(&core),
+        watched_policy,
+        Duration::from_millis(2000),
+    );
 
     // Capture endpoint. This is the path that replaced watching the physical
     // printer: Windows renders the job and hands it over as PDF. A busy port is

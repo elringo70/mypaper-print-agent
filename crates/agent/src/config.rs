@@ -101,6 +101,24 @@ struct FileConfig {
     /// Named print options the operator picks at print time (Fase 4).
     #[serde(default)]
     presets: Vec<PrintPreset>,
+    /// Watch the spooler for jobs, the pre-IPP capture path. Off by default:
+    /// it only ever sees the driver's PCL/PostScript, which cannot be measured.
+    /// `mpa watch` still uses it as a diagnostic.
+    #[serde(default)]
+    legacy_spool_watch: bool,
+}
+
+/// Whether the agent should watch the spooler at all.
+pub fn legacy_spool_watch(override_path: Option<PathBuf>) -> bool {
+    let Ok(path) = config_path(override_path) else {
+        return false;
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return false;
+    };
+    toml::from_str::<FileConfig>(&text)
+        .map(|f| f.legacy_spool_watch)
+        .unwrap_or(false)
 }
 
 /// `%APPDATA%/mypaper-print-agent/config.toml` on Windows,

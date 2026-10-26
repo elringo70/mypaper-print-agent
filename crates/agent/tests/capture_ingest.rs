@@ -178,7 +178,7 @@ fn authorising_queues_the_print_and_releases_the_job() {
             1,
             "cotizacion.png".into(),
             document,
-            Some(path.clone()),
+            Some(path),
         )
         .expect("ingested");
     }
