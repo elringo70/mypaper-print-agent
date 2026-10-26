@@ -26,7 +26,9 @@ base64 = "0.22"
 thiserror = "2"
 
 [features]
-# Tauri's custom protocol in release builds; dev uses the Vite server.
+# Default ON so a plain `cargo build` embeds the frontend into the binary.
+# `tauri dev` passes --no-default-features and then loads the Vite server.
+default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
 
 [lints]
