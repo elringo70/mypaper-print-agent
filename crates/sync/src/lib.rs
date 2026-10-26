@@ -1,14 +1,18 @@
 pub mod client;
 pub mod drain;
+pub mod entitlement;
 pub mod pairing;
 pub mod sign;
 pub mod tickets;
 
 pub use client::{
-    MaterializeAck, Pairing, Quote, QuoteLine, QuoteMode, QuoteModes, QuotePage, RemoteTier,
-    SyncClient, SyncError, TierSync, VersionInfo,
+    EntitlementToken, MaterializeAck, Pairing, Quote, QuoteLine, QuoteMode, QuoteModes, QuotePage,
+    RemoteTier, SyncClient, SyncError, TierSync, VersionInfo,
 };
 pub use drain::{drain_outbox, DrainReport};
+pub use entitlement::{
+    has_feature, verify as verify_entitlement, ClockGuard, EntitlementError, EntitlementPayload,
+};
 pub use pairing::{PairingError, PairingStore};
 pub use tickets::HttpTickets;
 

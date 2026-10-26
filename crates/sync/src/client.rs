@@ -52,6 +52,17 @@ pub struct Pairing {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntitlementToken {
+    pub token: String,
+    /// RFC 3339 instant, for display only: the token's `exp` is the authority.
+    #[serde(default)]
+    pub expires_at: Option<String>,
+    #[serde(default)]
+    pub features: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct VersionInfo {
     #[serde(rename = "contractVersion")]
     pub contract_version: String,
@@ -451,6 +462,13 @@ impl SyncClient {
 
     /// Drafts the server actually stored, newest first. Read-back for the link
     /// check and for outbox reconciliation.
+    /// Server-signed offline entitlement (absolute expiry, never extended
+    /// locally). Absent on servers predating the feature.
+    pub fn get_entitlement(&self) -> Result<EntitlementToken, SyncError> {
+        let res = Self::check(self.signed("GET", "/api/agent/entitlement", None).send()?)?;
+        res.json().map_err(|e| SyncError::Parse(e.to_string()))
+    }
+
     pub fn get_recent_jobs(&self) -> Result<Vec<RemoteJob>, SyncError> {
         let res = Self::check(self.signed("GET", "/api/agent/jobs", None).send()?)?;
         let body: JobsResponse = res.json().map_err(|e| SyncError::Parse(e.to_string()))?;

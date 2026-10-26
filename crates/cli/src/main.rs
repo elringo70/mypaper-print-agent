@@ -120,6 +120,12 @@ enum Commands {
         #[command(subcommand)]
         action: Option<TierAction>,
     },
+    /// Offline entitlement: refresh from the server, or inspect the cached one.
+    Entitlement {
+        /// Verify and print the cached token without contacting the server.
+        #[arg(long)]
+        status: bool,
+    },
     /// Show pending outbox drafts.
     Outbox,
     /// Release channel: check for a newer build or install it.
@@ -582,6 +588,9 @@ fn run() -> Result<(), AppError> {
         }
         Commands::Tiers { action } => {
             tiers_command(action, config_override)?;
+        }
+        Commands::Entitlement { status } => {
+            entitlement_command(status)?;
         }
         Commands::Outbox => {
             outbox_command(config_override)?;
@@ -1126,6 +1135,65 @@ fn tiers_command(
             Ok(())
         }
     }
+}
+
+/// Path of the cached entitlement token, next to `agent.json`.
+fn entitlement_path() -> Result<PathBuf, AppError> {
+    let config = mpa_agent::config_path(None).map_err(AppError::Config)?;
+    Ok(config.with_file_name("entitlement.jwt"))
+}
+
+/// `mpa entitlement`: fetch a fresh token, or verify the cached one.
+///
+/// The token is the only thing that lets the agent work without a network. It
+/// carries an absolute expiry issued by the server, and this command never
+/// extends it — `--status` only reads.
+fn entitlement_command(status_only: bool) -> Result<(), AppError> {
+    let token_path = entitlement_path()?;
+    let guard_path = token_path.with_file_name("entitlement-guard.json");
+
+    if !status_only {
+        let pairing = mpa_sync::PairingStore::load(None)?;
+        let client =
+            mpa_sync::SyncClient::new(&pairing.server_url, Some(pairing.agent_key.clone()))?;
+        let fresh = client.get_entitlement()?;
+        if let Some(parent) = token_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&token_path, fresh.token.as_bytes())?;
+        println!(
+            "token renovado (vence {})",
+            fresh.expires_at.as_deref().unwrap_or("según el token")
+        );
+    }
+
+    let token = std::fs::read_to_string(&token_path).map_err(|_| {
+        AppError::Tiers(
+            "sin token local: ejecuta `mpa entitlement` con el servidor disponible".into(),
+        )
+    })?;
+
+    // High-water mark: a clock that went backwards invalidates everything.
+    let mut guard = mpa_sync::ClockGuard::load(&guard_path);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    match guard.authorize(token.trim(), now) {
+        Ok(payload) => {
+            guard.save(&guard_path);
+            println!(
+                "ok: plan {} · vence {}",
+                payload.plan.as_deref().unwrap_or("-"),
+                payload.exp
+            );
+            println!("   features: {}", payload.features.join(", "));
+            println!("   horas restantes: {}", (payload.exp - now).max(0) / 3600);
+        }
+        Err(e) => println!("bloqueado: {e}"),
+    }
+    Ok(())
 }
 
 fn outbox_command(config_override: Option<PathBuf>) -> Result<(), AppError> {
