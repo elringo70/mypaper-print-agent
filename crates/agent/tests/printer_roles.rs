@@ -93,6 +93,7 @@ fn core_with_paused_job(
         .iter()
         .enumerate()
         .map(|(i, included)| WatchedPage {
+            area: None,
             page_no: i as u32 + 1,
             coverage: Coverage::new(10.0, 0.0, 0.0, 20.0),
             tier_id: Some("color100".into()),

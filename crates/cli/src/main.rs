@@ -937,6 +937,7 @@ fn push_test_command(
                 coverage,
                 tier_id: None,
                 included: true,
+                area: None,
             })
             .collect(),
         format: None,

@@ -112,6 +112,7 @@ mod tests {
                 coverage: Coverage::new(1.0, 2.0, 3.0, 4.0),
                 tier_id: Some("t6".into()),
                 included: true,
+                area: None,
             }],
             format: Some(mpa_analyzer::SpoolFormat::Image),
             spool_path: None,

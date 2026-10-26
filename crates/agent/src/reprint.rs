@@ -205,6 +205,7 @@ mod tests {
             coverage: mpa_domain::Coverage::new(0.0, 0.0, 0.0, 100.0),
             tier_id: None,
             included: true,
+            area: None,
         }];
 
         attempt_reprint(&entry).expect("reprint");

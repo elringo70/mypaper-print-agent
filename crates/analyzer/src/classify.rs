@@ -69,6 +69,16 @@ pub enum PageClass {
 }
 
 impl PageClass {
+    /// Stable wire name, matching the `serde` representation.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PageClass::Blanco => "blanco",
+            PageClass::Color => "color",
+            PageClass::Gris => "gris",
+            PageClass::Mono => "mono",
+        }
+    }
+
     /// Whether the page is charged at all.
     pub fn is_billable(self) -> bool {
         !matches!(self, PageClass::Blanco)

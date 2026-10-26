@@ -85,12 +85,14 @@ fn entry() -> OutboxEntry {
         target: TargetSelection::Ticket("order-101".into()),
         pages: vec![
             OutboxPage {
+                area: None,
                 page_no: 1,
                 coverage: Coverage::new(80.0, 10.0, 5.0, 2.0),
                 tier_id: Some("t10".into()),
                 included: true,
             },
             OutboxPage {
+                area: None,
                 page_no: 2,
                 coverage: Coverage::new(0.0, 0.0, 0.0, 3.0),
                 tier_id: Some("t6".into()),

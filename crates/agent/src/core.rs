@@ -55,6 +55,18 @@ pub struct WatchedPage {
     pub tier_id: Option<String>,
     pub included: bool,
     pub thumbnail_png: Vec<u8>,
+    /// Area measurement, when the analyzer produced one. `AREA` ladders bill
+    /// on it, so it must survive all the way to the draft sent to MyPaper.
+    pub area: Option<PageArea>,
+}
+
+/// The part of a page measurement that is not a CMYK channel.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageArea {
+    /// Share of the sheet carrying ink, 0-100.
+    pub area_pct: f32,
+    pub class: Option<mpa_analyzer::PageClass>,
 }
 
 #[derive(Debug, Clone)]
@@ -287,6 +299,9 @@ pub struct OutboxPage {
     pub coverage: Coverage,
     pub tier_id: Option<String>,
     pub included: bool,
+    /// Optional so entries persisted by older agents still load.
+    #[serde(default)]
+    pub area: Option<PageArea>,
 }
 
 /// Draft for the MyPaper sync. The server prices authoritatively and is
@@ -844,7 +859,11 @@ impl AgentCore {
                 // One tested function decides the label so the agent and the
                 // server agree: Fase 6 rules first, then the dearest rule set.
                 // MyPaper still prices the draft authoritatively.
-                let area_pct = p.metrics.map(|m| m.area_pct() as f32);
+                let area = p.metrics.map(|m| PageArea {
+                    area_pct: m.area_pct() as f32,
+                    class: Some(m.class),
+                });
+                let area_pct = area.map(|a| a.area_pct);
                 let tier_id = mpa_domain::dearest_tier(
                     &p.coverage,
                     area_pct,
@@ -855,6 +874,7 @@ impl AgentCore {
                 )
                 .map(|t| t.id.clone());
                 WatchedPage {
+                    area,
                     page_no: p.page_no,
                     coverage: p.coverage,
                     tier_id,
@@ -1014,6 +1034,7 @@ impl AgentCore {
                     coverage: p.coverage,
                     tier_id: p.tier_id,
                     included: p.included,
+                    area: p.area,
                 })
                 .collect(),
             format,
@@ -1368,6 +1389,7 @@ mod tests {
             41,
             vec![
                 WatchedPage {
+                    area: None,
                     page_no: 1,
                     coverage: Coverage::new(80.0, 80.0, 0.0, 0.0),
                     tier_id: Some("t10".into()),
@@ -1375,6 +1397,7 @@ mod tests {
                     thumbnail_png: Vec::new(),
                 },
                 WatchedPage {
+                    area: None,
                     page_no: 2,
                     coverage: Coverage::new(0.0, 0.0, 0.0, 3.0),
                     tier_id: Some("t6".into()),
@@ -1405,6 +1428,7 @@ mod tests {
             41,
             vec![
                 WatchedPage {
+                    area: None,
                     page_no: 1,
                     coverage: Coverage::new(80.0, 80.0, 0.0, 0.0),
                     tier_id: Some("t10".into()),
@@ -1412,6 +1436,7 @@ mod tests {
                     thumbnail_png: Vec::new(),
                 },
                 WatchedPage {
+                    area: None,
                     page_no: 2,
                     coverage: Coverage::new(0.0, 0.0, 0.0, 3.0),
                     tier_id: Some("t6".into()),

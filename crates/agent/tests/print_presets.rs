@@ -78,6 +78,7 @@ fn core_with_paused_job(format: Option<SpoolFormat>) -> (Arc<Mutex<AgentCore>>, 
         state: JobState::Paused,
         pages: vec![
             WatchedPage {
+                area: None,
                 page_no: 1,
                 coverage: Coverage::new(0.0, 0.0, 0.0, 12.0),
                 tier_id: Some("bw100".into()),
@@ -85,6 +86,7 @@ fn core_with_paused_job(format: Option<SpoolFormat>) -> (Arc<Mutex<AgentCore>>, 
                 thumbnail_png: Vec::new(),
             },
             WatchedPage {
+                area: None,
                 page_no: 2,
                 coverage: Coverage::new(0.0, 0.0, 0.0, 20.0),
                 tier_id: Some("bw100".into()),
@@ -253,6 +255,7 @@ fn core_with_devmode_job(
         document: "tesis.docx".into(),
         state: JobState::Paused,
         pages: vec![WatchedPage {
+            area: None,
             page_no: 1,
             coverage: Coverage::new(0.0, 0.0, 0.0, 12.0),
             tier_id: Some("bw100".into()),

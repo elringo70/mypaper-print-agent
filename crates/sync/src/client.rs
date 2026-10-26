@@ -155,6 +155,12 @@ struct JobPage {
     m: f32,
     y: f32,
     k: f32,
+    /// Area and class travel only when the analyzer measured pixels. The
+    /// server ignores them unless the workspace bills on AREA.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    coverage_nonwhite: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page_class: Option<&'static str>,
     include: bool,
 }
 
@@ -415,6 +421,8 @@ impl SyncClient {
                     m: p.coverage.m,
                     y: p.coverage.y,
                     k: p.coverage.k,
+                    coverage_nonwhite: p.area.map(|a| a.area_pct),
+                    page_class: p.area.and_then(|a| a.class).map(|c| c.as_str()),
                     include: p.included,
                 })
                 .collect(),
