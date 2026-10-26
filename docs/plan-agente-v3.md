@@ -176,6 +176,14 @@ descargar el runtime offline de WebView2 para el paquete definitivo.
 
 Aceptación: el binario no abre ningún handle de trabajo ajeno en operación normal.
 
+**Hecha.** `legacy_spool_watch` (falso por defecto) decide si se vigila el spooler. La
+ventana arranca con una lista blanca vacía y lo dice en el log: en operación normal el
+agente no abre ningún handle de trabajo ajeno. `mpa watch` y `mpa capture` siguen
+existiendo como diagnóstico, y la bandera devuelve el vigilante a quien lo necesite.
+
+La ventana ahora dice qué queda fuera de alcance, en lugar de dejarlo a la imaginación:
+copias desde el panel, USB y lo que se manda directo a otra impresora.
+
 ### F6 — Piloto en sombra
 
 Medir sin cobrar durante una semana en la papelería, comparar contra lo que el operador
