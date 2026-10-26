@@ -57,31 +57,77 @@ impl AgentRuntime {
     /// document arrives as PDF, already in the format the analyzer measures, and
     /// enters the same job map the window reads. Windows considers the job
     /// printed; the operator's authorisation is what puts it on paper.
-    pub fn start_capture(
+    pub fn start_capture<F>(
         &mut self,
         listener: std::net::TcpListener,
         inbox: std::path::PathBuf,
         port: u16,
-    ) -> Result<(), std::io::Error> {
+        quote: F,
+    ) -> Result<(), std::io::Error>
+    where
+        F: Fn(&[crate::pilot::PilotPage]) -> Option<(f64, f64)> + Send + 'static,
+    {
         let core = Arc::clone(&self.core);
         // Job ids are scoped by printer name, so the queue label keeps them
         // from ever colliding with spooler ids.
-        let mut next: u32 = 1;
+        let next: u32 = 1;
         std::thread::Builder::new()
             .name("mpa-ipp".into())
             .spawn(move || {
-                let result = mpa_ipp::serve_with(listener, inbox, port, |job, path| {
-                    let mut core = core.lock().expect("agent core");
-                    if let Err(e) = core.ingest_captured(
-                        CAPTURE_PRINTER,
-                        next,
-                        job.name.clone(),
-                        &job.document,
-                        Some(path.to_path_buf()),
-                    ) {
-                        eprintln!("mpa: captura {next}: {e}");
+                let mut watched = next;
+                let result = mpa_ipp::serve_with(listener, inbox.clone(), port, |job, path| {
+                    // Measure inside the lock; everything slow (HTTP price, file
+                    // write) happens after it, so the window never waits.
+                    let pages = {
+                        let mut core = core.lock().expect("agent core");
+                        if let Err(e) = core.ingest_captured(
+                            CAPTURE_PRINTER,
+                            watched,
+                            job.name.clone(),
+                            &job.document,
+                            Some(path.to_path_buf()),
+                        ) {
+                            eprintln!("mpa: captura {watched}: {e}");
+                        }
+                        core.snapshot()
+                            .into_iter()
+                            .find(|j| j.printer == CAPTURE_PRINTER && j.job_id == watched)
+                            .map(|j| {
+                                j.pages
+                                    .iter()
+                                    .map(|p| crate::pilot::PilotPage {
+                                        page_no: p.page_no,
+                                        class: p
+                                            .area
+                                            .and_then(|a| a.class)
+                                            .map(|c| format!("{c:?}").to_lowercase()),
+                                        area_pct: p.area.map(|a| a.area_pct),
+                                        c: p.coverage.c,
+                                        m: p.coverage.m,
+                                        y: p.coverage.y,
+                                        k: p.coverage.k,
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default()
+                    };
+                    watched = watched.saturating_add(1);
+
+                    // Shadow journal: the pilot measures and prints, nothing is
+                    // charged, and every sheet is left on record to compare.
+                    let (bw_total, color_total) = quote(&pages)
+                        .map(|(bw, color)| (Some(bw), Some(color)))
+                        .unwrap_or((None, None));
+                    let entry = crate::pilot::PilotEntry {
+                        at: chrono::Utc::now().to_rfc3339(),
+                        document: job.name.clone(),
+                        pages,
+                        bw_total,
+                        color_total,
+                    };
+                    if let Err(e) = crate::pilot::append(&inbox, &entry) {
+                        eprintln!("mpa: no se pudo escribir el diario del piloto: {e}");
                     }
-                    next = next.saturating_add(1);
                 });
                 if let Err(e) = result {
                     eprintln!("mpa: endpoint IPP detenido: {e}");

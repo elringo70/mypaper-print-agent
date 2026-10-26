@@ -6,6 +6,7 @@ pub mod core;
 pub mod gate;
 pub mod log;
 pub mod persist;
+pub mod pilot;
 pub mod reprint;
 pub mod runtime;
 pub mod tickets;

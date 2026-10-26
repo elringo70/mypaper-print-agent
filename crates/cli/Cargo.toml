@@ -15,6 +15,7 @@ mpa-analyzer = { path = "../analyzer", features = ["pdfium"] }
 mpa-agent = { path = "../agent" }
 mpa-sync = { path = "../sync" }
 mpa-ipp = { path = "../ipp" }
+chrono = "0.4"
 mpa-update = { path = "../update" }
 clap = { version = "4", features = ["derive"] }
 thiserror = "2"

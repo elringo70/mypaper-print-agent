@@ -132,6 +132,11 @@ enum Commands {
         #[arg(long)]
         reprint: Option<String>,
     },
+    /// Piloto en sombra: lo medido, sin cobrar nada.
+    Pilot {
+        #[command(subcommand)]
+        action: PilotAction,
+    },
     /// Local analysis cache: stats | gc | clear.
     Cache {
         #[command(subcommand)]
@@ -169,6 +174,16 @@ enum UpdateAction {
         /// Skip the confirmation prompt.
         #[arg(long)]
         yes: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum PilotAction {
+    /// Resumen del diario: trabajos, páginas por clase y total por juego de reglas.
+    Report {
+        /// Días hacia atrás (0 = todo el diario).
+        #[arg(long, default_value_t = 0)]
+        days: u32,
     },
 }
 
@@ -619,6 +634,9 @@ fn run() -> Result<(), AppError> {
         }
         Commands::Ipp { port, dir, reprint } => {
             ipp_command(port, dir, reprint)?;
+        }
+        Commands::Pilot { action } => {
+            pilot_command(action)?;
         }
         Commands::Cache { action } => {
             cache_command(action);
@@ -1423,6 +1441,71 @@ fn analyze_command(
             tier(PrintMode::Bw),
             tier(PrintMode::Color)
         );
+    }
+    Ok(())
+}
+
+/// Shadow pilot report: what the engine measured, and what it would have cost.
+///
+/// Nothing here charges: the numbers exist so the shop can compare them against
+/// what it is used to paying — and against what CyberPlanet reports for the same
+/// sheets — before any of this becomes a bill.
+fn pilot_command(action: PilotAction) -> Result<(), AppError> {
+    let dir = mpa_agent::config::config_path(None)
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("ipp-inbox")))
+        .unwrap_or_else(std::env::temp_dir);
+    match action {
+        PilotAction::Report { days } => {
+            let mut entries = mpa_agent::pilot::read(&dir);
+            if days > 0 {
+                let cutoff = chrono::Utc::now() - chrono::Duration::days(i64::from(days));
+                entries.retain(|e| {
+                    chrono::DateTime::parse_from_rfc3339(&e.at)
+                        .map(|at| at.with_timezone(&chrono::Utc) >= cutoff)
+                        .unwrap_or(true)
+                });
+            }
+            if entries.is_empty() {
+                println!(
+                    "diario vacío: {}",
+                    mpa_agent::pilot::journal_path(&dir).display()
+                );
+                return Ok(());
+            }
+            for entry in &entries {
+                println!(
+                    "{}\t{}\t{} pág.\tB/N {}\tColor {}",
+                    entry.at,
+                    entry.document,
+                    entry.pages.len(),
+                    entry
+                        .bw_total
+                        .map(|v| format!("${v:.2}"))
+                        .unwrap_or_else(|| "sin precio".into()),
+                    entry
+                        .color_total
+                        .map(|v| format!("${v:.2}"))
+                        .unwrap_or_else(|| "sin precio".into()),
+                );
+            }
+            let report = mpa_agent::pilot::summarize(&entries);
+            println!();
+            println!("trabajos\t{}", report.jobs);
+            println!("páginas\t{}", report.pages);
+            println!(
+                "  blanco {}\tmono {}\tgris {}\tcolor {}",
+                report.blank_pages, report.mono_pages, report.grey_pages, report.color_pages
+            );
+            println!("total B/N\t${:.2}", report.bw_total);
+            println!("total color\t${:.2}", report.color_total);
+            if report.unpriced_jobs > 0 {
+                println!(
+                    "sin precio\t{} trabajo(s) capturados sin servidor disponible",
+                    report.unpriced_jobs
+                );
+            }
+        }
     }
     Ok(())
 }

@@ -112,7 +112,37 @@ fn main() {
         .unwrap_or_else(std::env::temp_dir);
     match std::net::TcpListener::bind(("127.0.0.1", mpa_ipp::DEFAULT_PORT)) {
         Ok(listener) => {
-            if let Err(e) = runtime.start_capture(listener, inbox.clone(), mpa_ipp::DEFAULT_PORT) {
+            // Price for the pilot journal. A failure (unpaired, offline) leaves
+            // the measurement in place and the price unknown, which the report
+            // shows as "sin precio" instead of inventing one.
+            let quote_client = mpa_sync::PairingStore::load(None)
+                .ok()
+                .and_then(|pairing| {
+                    mpa_sync::SyncClient::new(&pairing.server_url, Some(pairing.agent_key)).ok()
+                })
+                .map(|client| Arc::new(Mutex::new(client)));
+            let quote = move |pages: &[mpa_agent::pilot::PilotPage]| -> Option<(f64, f64)> {
+                let client = quote_client.as_ref()?.lock().ok()?;
+                let request: Vec<mpa_sync::QuotePage> = pages
+                    .iter()
+                    .map(|p| mpa_sync::QuotePage {
+                        page_no: p.page_no,
+                        c: p.c,
+                        m: p.m,
+                        y: p.y,
+                        k: p.k,
+                        include: true,
+                    })
+                    .collect();
+                let quote = client.quote(&request).ok()?;
+                Some((
+                    quote.for_mode(mpa_domain::PrintMode::Bw).total,
+                    quote.for_mode(mpa_domain::PrintMode::Color).total,
+                ))
+            };
+            if let Err(e) =
+                runtime.start_capture(listener, inbox.clone(), mpa_ipp::DEFAULT_PORT, quote)
+            {
                 mpa_agent::log::warn(format!("captura IPP no arrancó: {e}"));
             } else {
                 mpa_agent::log::info(format!(

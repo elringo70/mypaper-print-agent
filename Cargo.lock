@@ -4529,6 +4529,7 @@ dependencies = [
 name = "mpa-cli"
 version = "0.3.0"
 dependencies = [
+ "chrono",
  "clap",
  "mpa-agent",
  "mpa-analyzer",

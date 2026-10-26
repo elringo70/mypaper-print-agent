@@ -92,7 +92,12 @@ fn a_printed_document_appears_in_the_window_measured() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind");
     let port = listener.local_addr().expect("addr").port();
     runtime
-        .start_capture(listener, dir.clone(), port)
+        .start_capture(listener, dir.clone(), port, |pages| {
+            // No server in this test: the journal records the measurement and
+            // leaves the price unknown, which is exactly the offline case.
+            assert!(!pages.is_empty(), "the journal gets the measured pages");
+            None
+        })
         .expect("capture starts");
 
     // 8x8 PNG: white sheet with a black block, so the page has measurable ink.
