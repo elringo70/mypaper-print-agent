@@ -1169,7 +1169,7 @@ fn entitlement_command(status_only: bool) -> Result<(), AppError> {
     }
 
     let token = std::fs::read_to_string(&token_path).map_err(|_| {
-        AppError::Tiers(
+        AppError::Entitlement(
             "sin token local: ejecuta `mpa entitlement` con el servidor disponible".into(),
         )
     })?;
@@ -1526,6 +1526,8 @@ enum AppError {
     Tiers(String),
     #[error("prueba: {0}")]
     Test(String),
+    #[error("{0}")]
+    Entitlement(String),
     #[error("sync: {0}")]
     Sync(#[from] mpa_sync::SyncError),
     #[error("pairing: {0}")]

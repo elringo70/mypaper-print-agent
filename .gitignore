@@ -5,3 +5,6 @@
 packaging/minisign.key
 # pdfium shared library, fetched by packaging/fetch-pdfium.ps1
 /vendor/pdfium/
+# Runtime de WebView2 offline y artefactos del instalador
+/vendor/webview2/
+/Output/

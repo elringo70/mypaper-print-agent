@@ -2,25 +2,63 @@
 <#
 .SYNOPSIS
   Release build + Inno Setup packaging for the MyPaper Print Agent (Windows).
+
+.DESCRIPTION
+  Genera un instalador "siguiente, siguiente, siguiente" con todo lo que el
+  agente necesita para arrancar en una máquina limpia:
+
+    mpa.exe            CLI (pair, doctor, entitlement, autostart)
+    mpa-desktop.exe    ventana Tauri con el frontend incrustado
+    pdfium.dll         rasterizador PDF (BSD-3), sin Ghostscript
+    WebView2           runtime, sólo si el equipo no lo trae ya
+
+  Requiere: Rust MSVC, Node 20+, Inno Setup 6. La primera ejecución descarga
+  pdfium y, salvo -SkipWebView2, el instalador offline de WebView2 (~127 MB).
+
 .EXAMPLE
   .\packaging\build.ps1
-  .\packaging\build.ps1 -SkipTests
+  .\packaging\build.ps1 -SkipTests -SkipWebView2
 #>
 param(
-    [switch]$SkipTests
+    [switch]$SkipTests,
+    [switch]$SkipWebView2
 )
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 Set-Location $root
 
-$version = (Select-String -Path crates/ui/Cargo.toml -Pattern '^version = "(.*)"').Matches.Groups[1].Value
+$version = (Select-String -Path crates/desktop/Cargo.toml -Pattern '^version = "(.+)"').Matches.Groups[1].Value
 Write-Host "== mpa $version =="
 
-# Rasterizador PDF: sin esta DLL el análisis de PDF no arranca.
+# --- Dependencias -----------------------------------------------------------------
 & (Join-Path $root "packaging\fetch-pdfium.ps1")
 if ($LASTEXITCODE -ne 0) { exit 1 }
 
+if (-not $SkipWebView2) {
+    & (Join-Path $root "packaging\fetch-webview2.ps1")
+    if ($LASTEXITCODE -ne 0) { exit 1 }
+} else {
+    Write-Warning "WebView2 offline omitido: el instalador avisará si el equipo no lo tiene."
+}
+
+# --- Frontend ---------------------------------------------------------------------
+# El binario incrusta el bundle: si esto se salta, el exe sirve la UI vieja.
+$ui = Join-Path $root "crates\desktop\ui"
+Push-Location $ui
+try {
+    if (Test-Path "package-lock.json") { npm ci } else { npm install }
+    if ($LASTEXITCODE -ne 0) { exit 1 }
+    npm run build
+    if ($LASTEXITCODE -ne 0) { exit 1 }
+} finally {
+    Pop-Location
+}
+if (-not (Test-Path (Join-Path $ui "dist\index.html"))) {
+    throw "el frontend no se compiló (falta dist\index.html)"
+}
+
+# --- Rust -------------------------------------------------------------------------
 if (-not $SkipTests) {
     cargo test --workspace --locked
     if ($LASTEXITCODE -ne 0) { exit 1 }
@@ -28,24 +66,41 @@ if (-not $SkipTests) {
     if ($LASTEXITCODE -ne 0) { exit 1 }
 }
 
-cargo build --release --locked -p mpa-cli -p mpa-ui
+# custom-protocol va por defecto: el binario embebe el frontend.
+cargo build --release --locked -p mpa-cli -p mpa-desktop
 if ($LASTEXITCODE -ne 0) { exit 1 }
 
+# --- Instalador -------------------------------------------------------------------
+# Inno puede estar por máquina (Program Files) o por usuario (winget sin UAC).
 $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-if (-not (Test-Path $iscc)) { throw "ISCC.exe not found (choco install innosetup)" }
+if (-not (Test-Path $iscc)) {
+    $iscc = Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"
+}
+if (-not (Test-Path $iscc)) {
+    throw "ISCC.exe no encontrado. Instala Inno Setup 6: winget install -e --id JRSoftware.InnoSetup"
+}
 
-& $iscc "/DAppVersion=$version" packaging\mpa.iss
+# cargo escribe en target\release, salvo cuando se compiló con --target.
+$releaseDir = Join-Path $root "target\x86_64-pc-windows-msvc\release"
+if (-not (Test-Path (Join-Path $releaseDir "mpa-desktop.exe"))) {
+    $releaseDir = Join-Path $root "target\release"
+}
+foreach ($exe in @("mpa.exe", "mpa-desktop.exe")) {
+    if (-not (Test-Path (Join-Path $releaseDir $exe))) { throw "falta $exe en $releaseDir" }
+}
+
+& $iscc "/DMyAppVersion=$version" "/DTargetDir=$releaseDir" packaging\mpa.iss
 if ($LASTEXITCODE -ne 0) { exit 1 }
 
 $setup = Get-ChildItem "Output\mpa-$version-setup.exe" | Select-Object -First 1
 Write-Host "installer: $($setup.FullName)"
 
-# Sign + hash for the release manifest (needs packaging/minisign.key).
+# --- Firma y manifiesto -----------------------------------------------------------
 if (Test-Path packaging\minisign.key) {
     if (Get-Command rsign -ErrorAction SilentlyContinue) {
         & rsign sign $setup.FullName -s packaging\minisign.key -x "$($setup.FullName).minisig" -W
     } else {
-        Write-Warning "rsign not found (cargo install rsign2); skipping signature"
+        Write-Warning "rsign no encontrado (cargo install rsign2); instalador sin firma"
     }
     $hash = (Get-FileHash $setup.FullName -Algorithm SHA256).Hash.ToLower()
     [pscustomobject]@{
@@ -55,7 +110,7 @@ if (Test-Path packaging\minisign.key) {
         signature = $null
         notes     = $null
     } | ConvertTo-Json | Out-File "Output\latest.json" -Encoding utf8
-    Write-Host "manifest: Output\latest.json (paste signature + final URL before publishing)"
+    Write-Host "manifest: Output\latest.json (pega firma y URL final antes de publicar)"
 } else {
-    Write-Warning "packaging\minisign.key missing; installer unsigned"
+    Write-Warning "packaging\minisign.key ausente; instalador sin firmar"
 }
