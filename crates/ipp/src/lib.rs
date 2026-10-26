@@ -271,6 +271,41 @@ fn printer_attributes(port: u16) -> Vec<u8> {
         "document-format-default",
         b"application/pdf",
     );
+    // Windows asks for exactly these 21 attributes before it will create a
+    // queue; a gap in the list reads as "dispositivo no encontrado". The
+    // fixture crates/ipp/tests/fixtures/windows-get-printer-attributes.bin is
+    // the real request it sends, and a test replays it.
+    write_attribute(
+        &mut out,
+        TAG_MIME,
+        "document-format-preferred",
+        b"application/pdf",
+    );
+    write_attribute(&mut out, TAG_KEYWORD, "ipp-versions-supported", b"1.1");
+    write_additional(&mut out, TAG_KEYWORD, b"2.0");
+    write_attribute(&mut out, TAG_KEYWORD, "media-type-supported", b"stationery");
+    // Mopria certification is what the Windows client looks for in an IPP
+    // endpoint; both spellings appear in the request.
+    write_attribute(&mut out, TAG_KEYWORD, "mopria-certified", b"1.0");
+    write_attribute(&mut out, TAG_KEYWORD, "mopria_certified", b"1.0");
+    write_attribute(&mut out, TAG_NAME, "printer-dns-sd-name", b"MyPaper");
+    write_attribute(&mut out, TAG_TEXT, "printer-firmware-name", b"mpa");
+    write_attribute(
+        &mut out,
+        TAG_TEXT,
+        "printer-firmware-string-version",
+        env!("CARGO_PKG_VERSION").as_bytes(),
+    );
+    write_attribute(&mut out, TAG_TEXT, "printer-location", b"");
+    let more_info = format!("http://127.0.0.1:{port}/");
+    write_attribute(&mut out, TAG_URI, "printer-more-info", more_info.as_bytes());
+    // Stable per installation: Windows keys the device on it.
+    write_attribute(
+        &mut out,
+        TAG_URI,
+        "printer-uuid",
+        b"urn:uuid:8f3a1c2b-4d5e-4f6a-9a1b-2c3d4e5f6071",
+    );
     write_attribute(&mut out, TAG_CHARSET, "charset-supported", b"utf-8");
     write_attribute(&mut out, TAG_LANGUAGE, "natural-language-configured", b"en");
 
@@ -584,9 +619,21 @@ pub fn serve(listener: TcpListener, out_dir: PathBuf, port: u16) -> Result<(), I
             let request = match read_http_request(&mut stream) {
                 Ok(request) => request,
                 Err(e) => {
-                    let text = e.to_string();
-                    if !text.contains("connection closed") && !text.contains("timed out") {
-                        println!("ipp: {text}");
+                    // Windows opens extra sockets that never send anything while
+                    // it probes the endpoint; a read timeout there is normal and
+                    // must not look like a failure in the log.
+                    match &e {
+                        IppError::Io(err)
+                            if matches!(
+                                err.kind(),
+                                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                            ) => {}
+                        _ => {
+                            let text = e.to_string();
+                            if !text.contains("connection closed") {
+                                println!("ipp: {text}");
+                            }
+                        }
                     }
                     break;
                 }
@@ -733,6 +780,31 @@ mod tests {
         assert!(!text.contains("image/jpeg"));
         // And it has to accept jobs, or the client refuses before sending.
         assert!(text.contains("printer-is-accepting-jobs"));
+    }
+
+    #[test]
+    fn every_attribute_windows_asks_for_comes_back() {
+        // The real Get-Printer-Attributes body captured from Add-Printer on
+        // Windows. Windows answers "device not found" if any requested
+        // attribute is missing, without saying which one.
+        let body = include_bytes!("../tests/fixtures/windows-get-printer-attributes.bin");
+        let request = Request::parse(body).expect("parsed");
+        let requested: Vec<String> = request
+            .attributes
+            .iter()
+            .filter(|a| a.name == "requested-attributes" || a.name.is_empty())
+            .flat_map(|a| a.values.iter())
+            .map(|v| String::from_utf8_lossy(v).into_owned())
+            .collect();
+        assert!(requested.len() > 15, "fixture should carry the full list");
+
+        let handled = handle(body, DEFAULT_PORT, 1).expect("handled");
+        let text = String::from_utf8_lossy(&handled.response);
+        let missing: Vec<&String> = requested
+            .iter()
+            .filter(|name| !text.contains(name.as_str()))
+            .collect();
+        assert!(missing.is_empty(), "faltan: {missing:?}");
     }
 
     #[test]
