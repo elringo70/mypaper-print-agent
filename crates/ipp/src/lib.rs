@@ -206,6 +206,25 @@ fn write_additional(out: &mut Vec<u8>, tag: u8, value: &[u8]) {
     out.extend_from_slice(value);
 }
 
+/// Start a response: header, the operation-attributes group every IPP response
+/// must carry, and nothing else yet.
+///
+/// Sending a bare 8-byte header was the bug that made Windows retry Validate-Job
+/// three times and never send the document: a response without the
+/// operation attributes group and the end-of-attributes tag is not parseable.
+fn response_start(major: u8, minor: u8, status: u16, request_id: u32, language: &str) -> Vec<u8> {
+    let mut out = response_header(major, minor, status, request_id);
+    out.push(TAG_OPERATION_ATTRIBUTES);
+    write_attribute(&mut out, TAG_CHARSET, "attributes-charset", b"utf-8");
+    write_attribute(
+        &mut out,
+        TAG_LANGUAGE,
+        "attributes-natural-language",
+        language.as_bytes(),
+    );
+    out
+}
+
 fn response_header(major: u8, minor: u8, status: u16, request_id: u32) -> Vec<u8> {
     let mut out = Vec::with_capacity(256);
     out.push(major);
@@ -400,17 +419,26 @@ pub fn handle(body: &[u8], port: u16, job_id: u32) -> Result<Handled, IppError> 
     let request_id = request.request_id;
     let operation = request.operation;
 
+    let language = request
+        .text("attributes-natural-language")
+        .unwrap_or_else(|| "en".into());
+
     let (response, job) = match operation {
         OP_GET_PRINTER_ATTRIBUTES => {
-            let mut out = response_header(major, minor, STATUS_OK, request_id);
+            let mut out = response_start(major, minor, STATUS_OK, request_id, &language);
             out.extend_from_slice(&printer_attributes(port));
             (out, None)
         }
-        OP_VALIDATE_JOB => (response_header(major, minor, STATUS_OK, request_id), None),
+        OP_VALIDATE_JOB => {
+            // No job attributes: validation is a yes/no, and the operation
+            // group plus the end tag is the whole legal answer.
+            let mut out = response_start(major, minor, STATUS_OK, request_id, &language);
+            out.push(TAG_END);
+            (out, None)
+        }
         OP_CANCEL_JOB | OP_GET_JOB_ATTRIBUTES => {
-            // State 7 = canceled, 9 = completed; nothing to do on our side.
             let state = if operation == OP_CANCEL_JOB { 7 } else { 9 };
-            let mut out = response_header(major, minor, STATUS_OK, request_id);
+            let mut out = response_start(major, minor, STATUS_OK, request_id, &language);
             out.extend_from_slice(&job_attributes(port, job_id, "job", state));
             (out, None)
         }
@@ -421,8 +449,6 @@ pub fn handle(body: &[u8], port: u16, job_id: u32) -> Result<Handled, IppError> 
             let format = request
                 .text("document-format")
                 .unwrap_or_else(|| "application/pdf".into());
-            // `Create-Job` legitimately has no document; `Send-Document` and
-            // `Print-Job` carry it.
             let document = std::mem::take(&mut request.document);
             let received = (!document.is_empty()).then(|| ReceivedJob {
                 id: job_id,
@@ -430,14 +456,15 @@ pub fn handle(body: &[u8], port: u16, job_id: u32) -> Result<Handled, IppError> 
                 format,
                 document,
             });
-            let mut out = response_header(major, minor, STATUS_OK, request_id);
+            let mut out = response_start(major, minor, STATUS_OK, request_id, &language);
             out.extend_from_slice(&job_attributes(port, job_id, &name, 9));
             (out, received)
         }
-        _ => (
-            response_header(major, minor, STATUS_NOT_SUPPORTED, request_id),
-            None,
-        ),
+        _ => {
+            let mut out = response_start(major, minor, STATUS_NOT_SUPPORTED, request_id, &language);
+            out.push(TAG_END);
+            (out, None)
+        }
     };
 
     Ok(Handled {
@@ -805,6 +832,34 @@ mod tests {
             .filter(|name| !text.contains(name.as_str()))
             .collect();
         assert!(missing.is_empty(), "faltan: {missing:?}");
+    }
+
+    #[test]
+    fn every_response_ends_with_the_end_of_attributes_tag() {
+        // Without this, Windows parses a truncated reply and retries forever.
+        let mut validate = vec![0x02, 0x00];
+        validate.extend_from_slice(&OP_VALIDATE_JOB.to_be_bytes());
+        validate.extend_from_slice(&3u32.to_be_bytes());
+        validate.push(TAG_OPERATION_ATTRIBUTES);
+        attr(&mut validate, TAG_CHARSET, "attributes-charset", b"utf-8");
+        validate.push(TAG_END);
+
+        for (name, body) in [
+            ("validate-job", validate),
+            ("print-job", print_job_request(b"%PDF-1.7")),
+        ] {
+            let handled = handle(&body, DEFAULT_PORT, 1).expect("handled");
+            assert_eq!(
+                handled.response.last(),
+                Some(&TAG_END),
+                "{name} response must end with the end-of-attributes tag"
+            );
+            let text = String::from_utf8_lossy(&handled.response);
+            assert!(
+                text.contains("attributes-charset"),
+                "{name} response needs the operation attributes group"
+            );
+        }
     }
 
     #[test]
