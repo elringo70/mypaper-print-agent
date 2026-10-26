@@ -1,0 +1,11 @@
+[package]
+name = "mpa-ipp"
+version = "0.1.0"
+publish = false
+edition = "2021"
+
+[dependencies]
+thiserror = "2"
+
+[lints]
+workspace = true

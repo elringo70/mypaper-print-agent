@@ -14,6 +14,7 @@ mpa-spool = { path = "../spool" }
 mpa-analyzer = { path = "../analyzer", features = ["pdfium"] }
 mpa-agent = { path = "../agent" }
 mpa-sync = { path = "../sync" }
+mpa-ipp = { path = "../ipp" }
 mpa-update = { path = "../update" }
 clap = { version = "4", features = ["derive"] }
 thiserror = "2"

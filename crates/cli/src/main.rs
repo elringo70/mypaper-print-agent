@@ -120,6 +120,15 @@ enum Commands {
         #[command(subcommand)]
         action: Option<TierAction>,
     },
+    /// IPP capture endpoint: everything printed to this queue arrives as PDF.
+    Ipp {
+        /// Port to listen on (localhost only).
+        #[arg(long, default_value_t = mpa_ipp::DEFAULT_PORT)]
+        port: u16,
+        /// Where received documents are written.
+        #[arg(long)]
+        dir: Option<std::path::PathBuf>,
+    },
     /// Local analysis cache: stats | gc | clear.
     Cache {
         #[command(subcommand)]
@@ -604,6 +613,9 @@ fn run() -> Result<(), AppError> {
         }
         Commands::Tiers { action } => {
             tiers_command(action, config_override)?;
+        }
+        Commands::Ipp { port, dir } => {
+            ipp_command(port, dir)?;
         }
         Commands::Cache { action } => {
             cache_command(action);
@@ -1409,6 +1421,31 @@ fn analyze_command(
         );
     }
     Ok(())
+}
+
+/// Capture endpoint. Windows' inbox IPP Class Driver renders the job and sends
+/// PDF, so what lands here is the document itself, whatever application printed
+/// it.
+fn ipp_command(port: u16, dir: Option<std::path::PathBuf>) -> Result<(), AppError> {
+    let out = dir.unwrap_or_else(|| {
+        mpa_agent::cache::default_cache_dir()
+            .parent()
+            .map(|p| p.join("ipp-inbox"))
+            .unwrap_or_else(std::env::temp_dir)
+    });
+    let listener = std::net::TcpListener::bind(("127.0.0.1", port))
+        .map_err(|e| AppError::Entitlement(format!("no pude abrir el puerto {port}: {e}")))?;
+    println!(
+        "ipp: escuchando en http://127.0.0.1:{port}{}",
+        mpa_ipp::PRINT_PATH
+    );
+    println!("ipp: documentos en {}", out.display());
+    println!("ipp: agrega la cola con");
+    println!(
+        "     Add-Printer -Name \"MyPaper\" -DriverName \"Microsoft IPP Class Driver\" -PortName \"http://127.0.0.1:{port}{}\"",
+        mpa_ipp::PRINT_PATH
+    );
+    mpa_ipp::serve(listener, out, port).map_err(|e| AppError::Entitlement(e.to_string()))
 }
 
 /// Local analysis cache. One document measured once stays measured until the

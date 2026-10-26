@@ -4532,6 +4532,7 @@ dependencies = [
  "mpa-agent",
  "mpa-analyzer",
  "mpa-domain",
+ "mpa-ipp",
  "mpa-spool",
  "mpa-sync",
  "mpa-update",
@@ -4565,6 +4566,13 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "toml 0.8.23",
+]
+
+[[package]]
+name = "mpa-ipp"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
 ]
 
 [[package]]
