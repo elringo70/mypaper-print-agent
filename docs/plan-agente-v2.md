@@ -587,6 +587,31 @@ Sigue pendiente: primera ejecución supervisada en la máquina, autoarranque (qu
 instalador, que ya registra la tarea elevada) y paridad fina con gpui (detalles de
 presentación de páginas).
 
+### Fase 5 — instalador (hecho y compilado)
+
+- `mpa.iss`: empaqueta `mpa.exe`, `mpa-desktop.exe` y `pdfium.dll`. Exige Windows 10 1809
+  o superior, **se niega a generar un paquete sin pdfium.dll** (sería un instalador que
+  funciona y un agente que no analiza), instala WebView2 desde el runtime offline si el
+  equipo no lo trae, borra el `mpa-ui.exe` retirado al actualizar y desregistra la tarea
+  de autoarranque al desinstalar.
+- `fetch-webview2.ps1`: baja el instalador offline (~127 MB) una sola vez. El `.iss` lo
+  embebe **sólo si existe**, así que el paquete compila igual sin él y avisa al instalar.
+- `build.ps1`: compila el frontend primero (el binario lo incrusta), encuentra Inno tanto
+  por máquina como por usuario, y pasa el directorio real de binarios — cargo escribe en
+  `target\release` salvo que se use `--target`.
+- `release.yml`: node 22, frontend, pdfium, WebView2 y `mpa-desktop`.
+
+Verificado compilando el instalador real en el espejo:
+
+```
+Output\mpa-0.3.0-setup.exe   9.6 MB   (sin warnings de ISCC)
+contenido: mpa.exe 7.5 MB · mpa-desktop.exe 15 MB · pdfium.dll 6.9 MB
+```
+
+Pendiente de Fase 5: **instalación de prueba en una VM limpia** (Windows 10 y 11 sin
+WebView2), descargar el runtime offline para el paquete definitivo, y la firma minisign
+del setup en el flujo de release.
+
 ## Primer entregable concreto
 
 Fase 1 con el test dorado corriendo sobre los 35 páginas del REA y el analizador sin
