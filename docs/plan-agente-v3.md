@@ -128,6 +128,17 @@ el operador reconoce (folio, cliente, total) y enviar el trabajo al elegido.
 Aceptación: imprimir con ticket elegido deja las líneas en ese ticket y el trabajo en
 `MATERIALIZED`.
 
+**Hecha.** El POS mandaba `cashierId` y ningún cliente, así que la lista mostraba un UUID.
+`findOpenTickets` ahora une cliente y cajero (ambos son filas de `users`, el cajero
+aliasado) y devuelve nombres; la ventana etiqueta `#50 · Cliente · Cajero · $104`.
+
+Verificado contra el POS local: emparejar, mandar 2 páginas al ticket #50 y materializarlas
+llevó el ticket de 104.00 a 107.00 con una línea real de «IMPRESIÓN COLOR». La línea y el
+total se restauraron después.
+
+También se apagan «Imprimir» y «Cancelar» en cuanto el trabajo deja de estar pendiente: un
+segundo clic ya no puede encolar otra impresión.
+
 ### F4 — Instalador con roles y cola
 
 - Página nueva del asistente: **¿cuál imprime en blanco y negro? ¿cuál en color?** con la
