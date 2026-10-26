@@ -1,13 +1,20 @@
+pub mod classify;
 pub mod convert;
 pub mod emf;
 pub mod format;
 pub mod gs;
+#[cfg(feature = "pdfium")]
+pub mod pdf;
 pub mod pdfgen;
 pub mod pipeline;
 pub mod raster;
 pub mod spool_capture;
 pub mod subset;
 
+pub use classify::{
+    analyze_image, analyze_rgba, analyze_rgba_with, PageClass, PageMetrics, Thresholds,
+    ENGINE_VERSION,
+};
 pub use convert::{convert_to_pdf, find_pcl_interpreter, ConvertError};
 pub use emf::{split_pages, EmfError, EmfPage};
 pub use format::{detect_format, SpoolFormat};

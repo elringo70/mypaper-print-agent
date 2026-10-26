@@ -10,7 +10,7 @@ path = "src/main.rs"
 [dependencies]
 mpa-domain = { path = "../domain" }
 mpa-spool = { path = "../spool" }
-mpa-analyzer = { path = "../analyzer" }
+mpa-analyzer = { path = "../analyzer", features = ["pdfium"] }
 mpa-agent = { path = "../agent" }
 mpa-sync = { path = "../sync" }
 mpa-update = { path = "../update" }

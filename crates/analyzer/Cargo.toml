@@ -8,9 +8,24 @@ mpa-domain = { path = "../domain" }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "pnm"] }
+# PDF rasterization. BSD-3 pdfium (redistributable) behind MIT/Apache bindings,
+# replacing the AGPL Ghostscript the analyzer used to require. Optional so the
+# crate still builds where the shared library is not provisioned.
+pdfium-render = { version = "0.9", optional = true }
+
+[features]
+default = []
+# Enables the PDF measurement path. Requires libpdfium at runtime.
+pdfium = ["dep:pdfium-render"]
+
+[[example]]
+name = "pdf_probe"
+required-features = ["pdfium"]
 
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "pnm"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 # GDI playback for EMF rasterization (Windows-only seam).
 [target.'cfg(windows)'.dependencies]

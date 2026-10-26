@@ -1,7 +1,8 @@
+use crate::classify::{analyze_image, PageMetrics, Thresholds};
 use crate::convert::{convert_to_pdf, ConvertError};
 use crate::format::{detect_format, image_format_from_extension, SpoolFormat};
 use crate::gs::{Ghostscript, GsError};
-use crate::raster::{coverage_of_file, coverage_of_image, thumbnail_png};
+use crate::raster::thumbnail_png;
 use mpa_domain::Coverage;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -23,6 +24,11 @@ pub enum AnalyzeError {
     Ghostscript(#[from] GsError),
     #[error("normalize to PDF: {0}")]
     Convert(#[from] ConvertError),
+    #[error("emf: {0}")]
+    Emf(#[from] crate::emf::EmfError),
+    #[cfg(feature = "pdfium")]
+    #[error("pdf: {0}")]
+    Pdf(#[from] crate::pdf::RenderError),
     #[error("image decode: {0}")]
     Image(#[from] image::ImageError),
     #[error("io: {0}")]
@@ -34,6 +40,11 @@ pub struct PageAnalysis {
     pub page_no: u32,
     pub coverage: Coverage,
     pub thumbnail_png: Vec<u8>,
+    /// Full pixel metrics, when the payload was actually measured rather than
+    /// estimated by a device. Carries the page class and the area coverage the
+    /// tier ladder bills on. `None` on the legacy PDF path until the renderer
+    /// lands; callers must not infer a class from `Option`.
+    pub metrics: Option<PageMetrics>,
 }
 
 #[derive(Debug, Clone)]
@@ -52,25 +63,30 @@ pub fn analyze_bytes(data: &[u8], gs: Option<&Ghostscript>) -> Result<JobAnalysi
     let mut analysis = match format {
         SpoolFormat::Image => {
             let img = image::load_from_memory(data)?;
-            let coverage = coverage_of_image(&img);
+            let metrics = analyze_image(&img);
+            let coverage = metrics
+                .map(|m| m.coverage())
+                .unwrap_or(Coverage::new(0.0, 0.0, 0.0, 0.0));
             JobAnalysis {
                 pages: vec![PageAnalysis {
                     page_no: 1,
                     coverage,
                     thumbnail_png: thumbnail_png(&img, 256),
+                    metrics,
                 }],
                 format: SpoolFormat::Image,
             }
         }
-        SpoolFormat::Pdf | SpoolFormat::PostScript => {
+        SpoolFormat::Pdf => analyze_pdf_best(data, gs)?,
+        SpoolFormat::PostScript => {
             let gs = gs.ok_or(AnalyzeError::Ghostscript(crate::gs::GsError::NotFound))?;
             analyze_pdf_bytes(data, gs)?
         }
-        // GDI applications spool EMF and laser printers PCL; neither is
-        // directly readable, but `convert_to_pdf` already normalizes them (and
-        // XPS) with the tools the installer expects. Rejecting them here (as
-        // this used to) leaves every PCL printer unanalyzable.
-        SpoolFormat::Emf | SpoolFormat::Xps | SpoolFormat::Pcl => {
+        // GDI applications spool EMF: measured directly on Windows, normalized
+        // elsewhere. XPS and PCL are not measurable with free tooling and go
+        // through the legacy conversion only when Ghostscript is present.
+        SpoolFormat::Emf => analyze_emf_best(data, gs)?,
+        SpoolFormat::Xps | SpoolFormat::Pcl => {
             let gs = gs.ok_or(AnalyzeError::Ghostscript(crate::gs::GsError::NotFound))?;
             let pdf = convert_to_pdf(data, format, gs)?;
             analyze_pdf_bytes(&pdf, gs)?
@@ -97,13 +113,17 @@ fn analyze_pdf_bytes(data: &[u8], gs: &Ghostscript) -> Result<JobAnalysis, Analy
 /// Ghostscript is only required for PDF/PS payloads.
 pub fn analyze_file(path: &Path, gs: Option<&Ghostscript>) -> Result<JobAnalysis, AnalyzeError> {
     if image_format_from_extension(path) {
-        let coverage = coverage_of_file(path)?;
         let img = image::open(path)?;
+        let metrics = analyze_image(&img);
+        let coverage = metrics
+            .map(|m| m.coverage())
+            .unwrap_or(Coverage::new(0.0, 0.0, 0.0, 0.0));
         return Ok(JobAnalysis {
             pages: vec![PageAnalysis {
                 page_no: 1,
                 coverage,
                 thumbnail_png: thumbnail_png(&img, 256),
+                metrics,
             }],
             format: SpoolFormat::Image,
         });
@@ -125,6 +145,83 @@ fn wants_thumbnail(page_no: u32) -> bool {
     (page_no as usize) <= MAX_THUMBNAIL_PAGES
 }
 
+/// One measured page: pixel metrics, the coverage derived from them, and a
+/// preview when the page is inside the thumbnail budget.
+#[cfg(any(windows, feature = "pdfium"))]
+fn measured_page(page_no: u32, img: image::RgbaImage) -> PageAnalysis {
+    let img = image::DynamicImage::ImageRgba8(img);
+    let metrics = analyze_image(&img);
+    let coverage = metrics
+        .map(|m| m.coverage())
+        .unwrap_or(Coverage::new(0.0, 0.0, 0.0, 0.0));
+    let thumbnail_png = if wants_thumbnail(page_no) {
+        thumbnail_png(&img, 256)
+    } else {
+        Vec::new()
+    };
+    PageAnalysis {
+        page_no,
+        coverage,
+        thumbnail_png,
+        metrics,
+    }
+}
+
+/// PDF measurement: pdfium when it is provisioned, otherwise the legacy
+/// Ghostscript path. Only the pdfium path yields a page class and area
+/// coverage, which is what the tier ladder bills on.
+fn analyze_pdf_best(data: &[u8], gs: Option<&Ghostscript>) -> Result<JobAnalysis, AnalyzeError> {
+    #[cfg(feature = "pdfium")]
+    if crate::pdf::available() {
+        return analyze_pdf_with_pdfium(data);
+    }
+    let gs = gs.ok_or(AnalyzeError::Ghostscript(GsError::NotFound))?;
+    analyze_pdf_bytes(data, gs)
+}
+
+#[cfg(feature = "pdfium")]
+fn analyze_pdf_with_pdfium(data: &[u8]) -> Result<JobAnalysis, AnalyzeError> {
+    let count = crate::pdf::page_count(data)?;
+    check_page_cap(count)?;
+    let dpi = Thresholds::default().dpi;
+    let mut pages = Vec::with_capacity(count);
+    for index in 0..count {
+        let img = crate::pdf::render_page(data, index, dpi)?;
+        pages.push(measured_page((index + 1) as u32, img));
+    }
+    Ok(JobAnalysis {
+        pages,
+        format: SpoolFormat::Pdf,
+    })
+}
+
+/// EMF measurement: GDI playback on Windows, legacy normalization elsewhere.
+fn analyze_emf_best(data: &[u8], gs: Option<&Ghostscript>) -> Result<JobAnalysis, AnalyzeError> {
+    #[cfg(windows)]
+    {
+        // Ghostscript is only a fallback off Windows; nothing to convert here.
+        let _ = gs;
+        let split = crate::emf::split_pages(data)?;
+        check_page_cap(split.len())?;
+        let dpi = Thresholds::default().dpi;
+        let mut pages = Vec::with_capacity(split.len());
+        for (index, page) in split.iter().enumerate() {
+            let img = crate::emf::rasterize_page(&page.bytes, page.width_mm, page.height_mm, dpi)?;
+            pages.push(measured_page((index + 1) as u32, img));
+        }
+        Ok(JobAnalysis {
+            pages,
+            format: SpoolFormat::Emf,
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        let gs = gs.ok_or(AnalyzeError::Ghostscript(GsError::NotFound))?;
+        let pdf = convert_to_pdf(data, SpoolFormat::Emf, gs)?;
+        analyze_pdf_bytes(&pdf, gs)
+    }
+}
+
 fn analyze_pdf_file(input: &Path, gs: &Ghostscript) -> Result<JobAnalysis, AnalyzeError> {
     let fractions = gs.inkcov(input)?;
     check_page_cap(fractions.len())?;
@@ -144,6 +241,7 @@ fn analyze_pdf_file(input: &Path, gs: &Ghostscript) -> Result<JobAnalysis, Analy
             page_no,
             coverage: Coverage::new(f[0] * 100.0, f[1] * 100.0, f[2] * 100.0, f[3] * 100.0),
             thumbnail_png,
+            metrics: None,
         });
     }
     let _ = std::fs::remove_dir_all(&dir);
@@ -285,6 +383,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg(not(feature = "pdfium"))]
     #[test]
     fn pdf_without_ghostscript_fails_clearly() {
         let pdf = minimal_pdf();

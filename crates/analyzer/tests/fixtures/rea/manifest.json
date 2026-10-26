@@ -1,0 +1,870 @@
+{
+  "generated_by": "tools/main.js (Node v22.23.4, zlib determinista nivel 9)",
+  "count": 30,
+  "cases": [
+    {
+      "id": "CP-001",
+      "file": "CP-001_pagina_blanca_A4.pdf",
+      "sha256": "3371c88b85659fc6bcd684ebd7081108b0fa81ee3fae9356cf31ae24d13f8aa6",
+      "bytes": 801,
+      "paper": "A4",
+      "pages": 1,
+      "page_size_pt": [
+        [
+          595.28,
+          841.89
+        ]
+      ],
+      "images": [
+        []
+      ],
+      "truth": {
+        "label": "pagina_blanca",
+        "class_proyectada": "blancoa",
+        "digital_coverage": 0,
+        "desc": "sin contenido"
+      }
+    },
+    {
+      "id": "CP-002",
+      "file": "CP-002_texto_negro_10pt.pdf",
+      "sha256": "d729e7169c8340036253572757ded954c775866945fa7f73c07b828a46e960e5",
+      "bytes": 1205,
+      "paper": "A4",
+      "pages": 1,
+      "page_size_pt": [
+        [
+          595.28,
+          841.89
+        ]
+      ],
+      "images": [
+        []
+      ],
+      "truth": {
+        "label": "texto_negro_pequeno",
+        "class_proyectada": "negro",
+        "digital_coverage_est": 0.015,
+        "desc": "parrafo 10pt ~1.5%; refuerza tramo 'Texto' 0-21%"
+      }
+    },
+    {
+      "id": "CP-003",
+      "file": "CP-003_texto_negro_denso_8pt.pdf",
+      "sha256": "5324c7090ea64322b65c76f7fad88f334f9f9f0f1e6d9c53f87bad502d6be894",
+      "bytes": 11927,
+      "paper": "A4",
+      "pages": 1,
+      "page_size_pt": [
+        [
+          595.28,
+          841.89
+        ]
+      ],
+      "images": [
+        []
+      ],
+      "truth": {
+        "label": "texto_denso",
+        "class_proyectada": "negro_denso",
+        "digital_coverage_est": 0.32,
+        "desc": "2 columnas 8pt llenas; cerca del umbral 21-50%"
+      }
+    },
+    {
+      "id": "CP-004",
+      "file": "CP-004_bloque_negro_60pct.pdf",
+      "sha256": "4f47b357d3c117753f41bd7d99740dce5d9db2867d79cd2710aa8895c196afd5",
+      "bytes": 845,
+      "paper": "A4",
+      "pages": 1,
+      "page_size_pt": [
+        [
+          595.28,
+          841.89
+        ]
+      ],
+      "images": [
+        []
+      ],
+      "truth": {
+        "label": "bloque_negro",
+        "class_proyectada": "negro_pleno_tramo",
+        "digital_coverage": 0.6,
+        "desc": "rect negro 75%x80%"
+      }
+    },
+    {
+      "id": "CP-005",
+      "file": "CP-005_region_color_pequena.pdf",
+      "sha256": "54307ea786f5af843f780e0662ddb38399d0f00bc8ed5c7293835d5759eb4351",
+      "bytes": 855,
+      "paper": "A4",
+      "pages": 1,
+      "page_size_pt": [
+        [
+          595.28,
+          841.89
+        ]
+      ],
+      "images": [
+        []
+      ],
+      "truth": {
+        "label": "region_color_pequena",
+        "class_proyectada": "color",
+        "digital_coverage": 0.0022,
+        "per_channel": {
+          "cyan": 0.0022
+        },
+        "desc": "cian puro 8%ancho x 2.75%alto"
+      }
+    },
+    {
+      "id": "CP-006",
+      "file": "CP-006_region_color_grande.pdf",
+      "sha256": "763ddbdea0e425663dc6e7dbb0fdd9787c0e8df28ea8d0e0c4ec85ffee638332",
+      "bytes": 853,
+      "paper": "A4",
+      "pages": 1,
+      "page_size_pt": [
+        [
+          595.28,
+          841.89
+        ]
+      ],
+      "images": [
+        []
+      ],
+      "truth": {
+        "label": "region_color_grande",
+        "class_proyectada": "color_foto",
+        "digital_coverage": 0.495,
+        "per_channel": {
+          "magenta": 0.495
+        },
+        "desc": "magenta 90%x55%"
+      }
+    },
+    {
+      "id": "CP-007",
+      "file": "CP-007_cian_pleno.pdf",
+      "sha256": "9b825830d36a48851a298660baab6e3af8367df7ead57bc62a122e28fc7eec95",
+      "bytes": 833,
+      "paper": "A4",
+      "pages": 1,
+      "page_size_pt": [
+        [
+          595.28,
+          841.89
+        ]
+      ],
+      "images": [
+        []
+      ],
+      "truth": {
+        "label": "cian_pleno",
+        "class_proyectada": "color_pleno",
+        "digital_coverage": 1,
+        "per_channel": {
+          "cyan": 1
+        },
+        "desc": "llena de página en DeviceCMYK"
+      }
+    },
+    {
+      "id": "CP-008",
+      "file": "CP-008_magenta_pleno.pdf",
+      "sha256": "eebdb91e32deb3f2aaddf98fe4d6b80c9bd06ace15c8d8daa7499959febd098e",
+      "bytes": 836,
+      "paper": "A4",
+      "pages": 1,
+      "page_size_pt": [
+        [
+          595.28,
+          841.89
+        ]
+      ],
+      "images": [
+        []
+      ],
+      "truth": {
+        "label": "magenta_pleno",
+        "class_proyectada": "color_pleno",
+        "digital_coverage": 1,
+        "per_channel": {
+          "magenta": 1
+        },
+        "desc": "llena de página en DeviceCMYK"
+      }
+    },
+    {
+      "id": "CP-009",
+      "file": "CP-009_amarillo_pleno.pdf",
+      "sha256": "2f720241dbc1933984f32ffe81aeaa3576a34488bdd4322c9029b7e53f5a2f5b",
+      "bytes": 837,
+      "paper": "A4",
+      "pages": 1,
+      "page_size_pt": [
+        [
+          595.28,
+          841.89
+        ]
+      ],
+      "images": [
+        []
+      ],
+      "truth": {
+        "label": "amarillo_pleno",
+        "class_proyectada": "color_pleno",
+        "digital_coverage": 1,
+        "per_channel": {
+          "yellow": 1
+        },
+        "desc": "llena de página en DeviceCMYK"
+      }
+    },
+    {
+      "id": "CP-010",
+      "file": "CP-010_negro_pleno.pdf",
+      "sha256": "fb2636c003e98039962ea6913dec6fc7c8c79ea7a6c687f48c4f34936ca8ba34",
+      "bytes": 834,
+      "paper": "A4",
+      "pages": 1,
+      "page_size_pt": [
+        [
+          595.28,
+          841.89
+        ]
+      ],
+      "images": [
+        []
+      ],
+      "truth": {
+        "label": "negro_pleno",
+        "class_proyectada": "negro",
+        "digital_coverage": 1,
+        "per_channel": {
+          "black": 1
+        },
+        "desc": "llena de página en DeviceCMYK"
+      }
+    },
+    {
+      "id": "CP-011",
+      "file": "CP-011_rgb_saturacion_alta_100pct.pdf",
+      "sha256": "49a7de08c98d03c9e60fb9c42c6462a0d892042a568be63ae46ee41e0f68c4fd",
+      "bytes": 2586,
+      "paper": "A4",
+      "pages": 1,
+      "page_size_pt": [
+        [
+          595.28,
+          841.89
+        ]
+      ],
+      "images": [
+        [
+          {
+            "name": "RM",
+            "space": "DeviceRGB",
+            "w": 600,
+            "h": 849,
+            "bpc": 8,
+            "has_smask": false,
+            "kind": "devicergb-8bpc"
+          }
+        ]
+      ],
+      "truth": {
+        "label": "rgb_saturacion_alta_100pct",
+        "class_proyectada": "color",
+        "digital_coverage": 1,
+        "desc": "imagen RGB full-bleed sRGB(0,0,255) saturación 100%"
+      }
+    },
+    {
+      "id": "CP-012",
+      "file": "CP-012_rgb_saturacion_media_50pct.pdf",
+      "sha256": "14961c4ef517f7a3e7df1bb8f26946f2fbd5b8ea63f15bbca2c4c5206b5e1dbe",
+      "bytes": 2586,
+      "paper": "A4",
+      "pages": 1,
+      "page_size_pt": [
+        [
+          595.28,
+          841.89
+        ]
+      ],
+      "images": [
+        [
+          {
+            "name": "RM",
+            "space": "DeviceRGB",
+            "w": 600,
+            "h": 849,
+            "bpc": 8,
+            "has_smask": false,
+            "kind": "devicergb-8bpc"
+          }
+        ]
+      ],
+      "truth": {
+        "label": "rgb_saturacion_media_50pct",
+        "class_proyectada": "color",
+        "digital_coverage": 1,
+        "desc": "imagen RGB full-bleed sRGB(128,128,255) saturación 50%"
+      }
+    },
+    {
+      "id": "CP-013",
+      "file": "CP-013_rgb_saturacion_baja_10pct.pdf",
+      "sha256": "f443f29ef53216adaf370f5c72e20eea48f43eab6759ce5eac3b265c3faf24e5",
+      "bytes": 2586,
+      "paper": "A4",
+      "pages": 1,
+      "page_size_pt": [
+        [
+          595.28,
+          841.89
+        ]
+      ],
+      "images": [
+        [
+          {
+            "name": "RM",
+            "space": "DeviceRGB",
+            "w": 600,
+            "h": 849,
+            "bpc": 8,
+            "has_smask": false,
+            "kind": "devicergb-8bpc"
+          }
+        ]
+      ],
+      "truth": {
+        "label": "rgb_saturacion_baja_10pct",
+        "class_proyectada": "color",
+        "digital_coverage": 1,
+        "desc": "imagen RGB full-bleed sRGB(230,230,255) saturación 10%"
+      }
+    },
+    {
+      "id": "CP-014",
+      "file": "CP-014_escala_grises.pdf",
+      "sha256": "8bca85d68e9d3240ee766b1395bbf7983cb3ec279f998f7bae683f8292581e0e",
+      "bytes": 1895,
+      "paper": "A4",
+      "pages": 1,
+      "page_size_pt": [
+        [
+          595.28,
+          841.89
+        ]
+      ],
+      "images": [
+        [
+          {
+            "name": "GS",
+            "space": "DeviceGray",
+            "w": 1024,
+            "h": 128,
+            "bpc": 8,
+            "has_smask": false,
+            "kind": "devicegray-8bpc"
+          }
+        ]
+      ],
+      "truth": {
+        "label": "escala_grises",
+        "class_proyectada": "gris_mixto",
+        "digital_coverage": 0.147,
+        "desc": "imagen ocupa 14.7% del área; dentro: 75% bandas por niveles 28*k y 25% gradiente 0..254; DeviceGray"
+      }
+    },
+    {
+      "id": "CP-015",
+      "file": "CP-015_grises_claros_oscuros.pdf",
+      "sha256": "8be1d779598c521c0d24ed921fcac2a314896f2c6d64abeb582658a602ac0f5e",
+      "bytes": 1006,
+      "paper": "A4",
+      "pages": 1,
+      "page_size_pt": [
+        [
+          595.28,
+          841.89
+        ]
+      ],
+      "images": [
+        []
+      ],
+      "truth": {
+        "label": "grises_claros_oscuros",
+        "class_proyectada": "gris",
+        "digital_coverage": 0.1378,
+        "desc": "6 sellos grises 5,10,90,94,96.5,98% DeviceGray; 480x24 c/u => 13.78% del área"
+      }
+    },
+    {
+      "id": "CP-016",
+      "file": "CP-016_contenido_muy_ligero.pdf",
+      "sha256": "99af0b88201efda52b32ba034bb12ea87a72ef33031abe21f3d9d4f5eace154a",
+      "bytes": 1021,
+      "paper": "A4",
+      "pages": 1,
+      "page_size_pt": [
+        [
+          595.28,
+          841.89
+        ]
+      ],
+      "images": [
+        []
+      ],
+      "truth": {
+        "label": "contenido_muy_ligero",
+        "class_proyectada": "indefinido_blanco_ejecer",
+        "digital_coverage": 0.087,
+        "desc": "parches CMYK con <2% de tinta por canal + hairline 0.1pt; unión ~8.7% del área"
+      }
+    },
+    {
+      "id": "CP-017",
+      "file": "CP-017_mixto_6paginas.pdf",
+      "sha256": "40e3ef9d56c110fdc68ad37ef0a17750af52956cde792000068df5c8448a3cd4",
+      "bytes": 781020,
+      "paper": "A4",
+      "pages": 6,
+      "page_size_pt": [
+        [
+          595.28,
+          841.89
+        ],
+        [
+          595.28,
+          841.89
+        ],
+        [
+          595.28,
+          841.89
+        ],
+        [
+          595.28,
+          841.89
+        ],
+        [
+          595.28,
+          841.89
+        ],
+        [
+          595.28,
+          841.89
+        ]
+      ],
+      "images": [
+        [],
+        [],
+        [
+          {
+            "name": "B",
+            "space": "DeviceRGB",
+            "w": 300,
+            "h": 425,
+            "bpc": 8,
+            "has_smask": false,
+            "kind": "devicergb-8bpc"
+          }
+        ],
+        [],
+        [],
+        [
+          {
+            "name": "PH",
+            "space": "DeviceRGB",
+            "w": 480,
+            "h": 678,
+            "bpc": 8,
+            "has_smask": false,
+            "kind": "devicergb-8bpc"
+          }
+        ]
+      ],
+      "truth": {
+        "label": "mixto_6paginas",
+        "class_proyectada": "heterogeneo",
+        "paginas_proyectadas": [
+          "blanca",
+          "negro_denso",
+          "color_pleno",
+          "negro_banda_22",
+          "blanca",
+          "foto"
+        ],
+        "desc": "6 páginas mixtas: blanca / texto denso / pleno azul / banda gris 22.5% / blanca / foto procedural"
+      }
+    },
+    {
+      "id": "CP-018",
+      "file": "CP-018_transparencia_SMask.pdf",
+      "sha256": "3801a7846326a2836bbbc41d33aac3f91fa3f03f3e6dd31fc3d48bc756ee6f45",
+      "bytes": 2240,
+      "paper": "A4",
+      "pages": 1,
+      "page_size_pt": [
+        [
+          595.28,
+          841.89
+        ]
+      ],
+      "images": [
+        [
+          {
+            "name": "TB",
+            "space": "DeviceRGB",
+            "w": 400,
+            "h": 567,
+            "bpc": 8,
+            "has_smask": true,
+            "kind": "devicergb-8bpc"
+          }
+        ]
+      ],
+      "truth": {
+        "label": "transparencia_SMask",
+        "class_proyectada": "indefinido_color_transparente",
+        "digital_coverage": 0.19,
+        "desc": "rect azul RGB con SMask 50%; compositado sobre blanco"
+      }
+    },
+    {
+      "id": "CP-019a",
+      "file": "CP-019a_tamano_a3.pdf",
+      "sha256": "c8d6cb9c3ee4d1c412f3ef0bdd0f71c4d203cf6b598b9a1fd161b7f24da6a9fe",
+      "bytes": 829,
+      "paper": "A3",
+      "pages": 1,
+      "page_size_pt": [
+        [
+          841.89,
+          1190.55
+        ]
+      ],
+      "images": [
+        []
+      ],
+      "truth": {
+        "label": "tamano_A3",
+        "class_proyectada": "negro",
+        "digital_coverage": 0.4,
+        "paper_mm": [
+          297,
+          420
+        ],
+        "desc": "banda negra inferior 40% en A3 (297x420 mm)"
+      }
+    },
+    {
+      "id": "CP-019b",
+      "file": "CP-019b_tamano_letter.pdf",
+      "sha256": "2f61a85cfaa6a6075c3b2a56b3c5b2fc552f763bfd36d8f672972be0aee91800",
+      "bytes": 828,
+      "paper": "Letter",
+      "pages": 1,
+      "page_size_pt": [
+        [
+          612,
+          792
+        ]
+      ],
+      "images": [
+        []
+      ],
+      "truth": {
+        "label": "tamano_Letter",
+        "class_proyectada": "negro",
+        "digital_coverage": 0.4,
+        "paper_mm": [
+          216,
+          279
+        ],
+        "desc": "banda negra inferior 40% en Letter (216x279 mm)"
+      }
+    },
+    {
+      "id": "CP-019c",
+      "file": "CP-019c_tamano_legal.pdf",
+      "sha256": "d5a725160a40fd191076f73b18a77cd343b3e17762e955166c419ce4a08b8851",
+      "bytes": 828,
+      "paper": "Legal",
+      "pages": 1,
+      "page_size_pt": [
+        [
+          612,
+          1008
+        ]
+      ],
+      "images": [
+        []
+      ],
+      "truth": {
+        "label": "tamano_Legal",
+        "class_proyectada": "negro",
+        "digital_coverage": 0.4,
+        "paper_mm": [
+          216,
+          356
+        ],
+        "desc": "banda negra inferior 40% en Legal (216x356 mm)"
+      }
+    },
+    {
+      "id": "CP-019d",
+      "file": "CP-019d_tamano_a5.pdf",
+      "sha256": "62035b74da3578d09a8498e838ea2f58bdbc5e6dd98192adaf12ff4a1a54976e",
+      "bytes": 829,
+      "paper": "A5",
+      "pages": 1,
+      "page_size_pt": [
+        [
+          419.53,
+          595.28
+        ]
+      ],
+      "images": [
+        []
+      ],
+      "truth": {
+        "label": "tamano_A5",
+        "class_proyectada": "negro",
+        "digital_coverage": 0.4,
+        "paper_mm": [
+          148,
+          210
+        ],
+        "desc": "banda negra inferior 40% en A5 (148x210 mm)"
+      }
+    },
+    {
+      "id": "CP-019e",
+      "file": "CP-019e_tamano_tabloid.pdf",
+      "sha256": "ac9ec709a1004dfcbc3101bd9f4cb11ff16a91460a9afe1f064f28cf962835d1",
+      "bytes": 830,
+      "paper": "Tabloid",
+      "pages": 1,
+      "page_size_pt": [
+        [
+          792,
+          1224
+        ]
+      ],
+      "images": [
+        []
+      ],
+      "truth": {
+        "label": "tamano_Tabloid",
+        "class_proyectada": "negro",
+        "digital_coverage": 0.4,
+        "paper_mm": [
+          279,
+          432
+        ],
+        "desc": "banda negra inferior 40% en Tabloid (279x432 mm)"
+      }
+    },
+    {
+      "id": "CP-019f",
+      "file": "CP-019f_tamano_custom127x176mm.pdf",
+      "sha256": "86230d92b8ce8dee0624beccb567a6ab7771ebc747c83956790ba19af6469031",
+      "bytes": 838,
+      "paper": "Custom127x176mm",
+      "pages": 1,
+      "page_size_pt": [
+        [
+          360,
+          498.9
+        ]
+      ],
+      "images": [
+        []
+      ],
+      "truth": {
+        "label": "tamano_Custom127x176mm",
+        "class_proyectada": "negro",
+        "digital_coverage": 0.4,
+        "paper_mm": [
+          127,
+          176
+        ],
+        "desc": "banda negra inferior 40% en Custom127x176mm (127x176 mm)"
+      }
+    },
+    {
+      "id": "CP-020a",
+      "file": "CP-020a_equivalente_vector.pdf",
+      "sha256": "b55d6a695ffa0eccdafd0da891203519509071e5a95d428b67aaa379aba6fdf1",
+      "bytes": 1725,
+      "paper": "A4",
+      "pages": 1,
+      "page_size_pt": [
+        [
+          595.28,
+          841.89
+        ]
+      ],
+      "images": [
+        []
+      ],
+      "truth": {
+        "label": "equivalente_ruta_vector",
+        "class_proyectada": "color",
+        "digital_coverage": 0.5876777777777777,
+        "desc": "ruta vectorial (rects)"
+      }
+    },
+    {
+      "id": "CP-020b",
+      "file": "CP-020b_equivalente_raster.pdf",
+      "sha256": "738dea8d6624d8dfbe1fc7f4fc078cf93142d8d61c7b15a0a9e62b5ba2388f87",
+      "bytes": 7500,
+      "paper": "A4",
+      "pages": 1,
+      "page_size_pt": [
+        [
+          595.28,
+          841.89
+        ]
+      ],
+      "images": [
+        [
+          {
+            "name": "RA",
+            "space": "DeviceRGB",
+            "w": 595,
+            "h": 842,
+            "bpc": 8,
+            "has_smask": false,
+            "kind": "devicergb-8bpc"
+          }
+        ]
+      ],
+      "truth": {
+        "label": "equivalente_ruta_raster",
+        "class_proyectada": "color",
+        "digital_coverage": 0.5876777777777777,
+        "desc": "misma composición, rasterizada 595x842 px; hash y bytes distintos"
+      }
+    },
+    {
+      "id": "CP-021",
+      "file": "CP-021_fotografia_procedural.pdf",
+      "sha256": "d041a5010adc0d88a7ce1ef2f7041bad0d1f549c163cd7ebf6a6bbbfb00b2af4",
+      "bytes": 767908,
+      "paper": "A4",
+      "pages": 1,
+      "page_size_pt": [
+        [
+          595.28,
+          841.89
+        ]
+      ],
+      "images": [
+        [
+          {
+            "name": "PH",
+            "space": "DeviceRGB",
+            "w": 480,
+            "h": 678,
+            "bpc": 8,
+            "has_smask": false,
+            "kind": "devicergb-8bpc"
+          }
+        ]
+      ],
+      "truth": {
+        "label": "foto_procedural",
+        "class_proyectada": "color_foto",
+        "digital_coverage": 0.999,
+        "desc": "imagen RGB con ruido LCG (seed 20261022), sin blanco puro"
+      }
+    },
+    {
+      "id": "CP-022",
+      "file": "CP-022_hairlines_bordes.pdf",
+      "sha256": "32f913adcc199d5464dd2315e1388f672e09b698e32555761db35346963d7e3e",
+      "bytes": 3917,
+      "paper": "A4",
+      "pages": 1,
+      "page_size_pt": [
+        [
+          595.28,
+          841.89
+        ]
+      ],
+      "images": [
+        []
+      ],
+      "truth": {
+        "label": "hairlines",
+        "class_proyectada": "gris_visual",
+        "digital_coverage_est": 0.021,
+        "desc": "retícula 0.25pt cada 18pt: <1px a 300dpi -> gris clásico; ~2.1% cobertura geométrica"
+      }
+    },
+    {
+      "id": "CP-023",
+      "file": "CP-023_halftone_20pct.pdf",
+      "sha256": "136d2cd59a22d2957eeae234edcb70dbcabeb36abe6351c2475c8576d8315737",
+      "bytes": 1406,
+      "paper": "A4",
+      "pages": 1,
+      "page_size_pt": [
+        [
+          595.28,
+          841.89
+        ]
+      ],
+      "images": [
+        [
+          {
+            "name": "HT",
+            "space": "ImageMask",
+            "w": 595,
+            "h": 842,
+            "bpc": 1,
+            "has_smask": false,
+            "kind": "1bpc-mask"
+          }
+        ]
+      ],
+      "truth": {
+        "label": "halftone_20pct",
+        "class_proyectada": "gris_indeciso",
+        "digital_coverage": 0.196,
+        "desc": "puntos negros 1bpc ~19.6% del área: gris si interpolan, negro si umbralean"
+      }
+    },
+    {
+      "id": "CP-024",
+      "file": "CP-024_colores_vivos_calrgb_fullA4.pdf",
+      "sha256": "f9993f75d4465392b8e71a78b7c088c914b8147977535d0bc6dd63db22120e4a",
+      "bytes": 904,
+      "paper": "A4",
+      "pages": 1,
+      "page_size_pt": [
+        [
+          595.28,
+          841.89
+        ]
+      ],
+      "images": [
+        []
+      ],
+      "truth": {
+        "label": "color_mixto_sat",
+        "class_proyectada": "color_pleno",
+        "digital_coverage": 1,
+        "desc": "mitades azul/amarillo sRGB plenos (CalRGB-equivalente)"
+      }
+    }
+  ]
+}
