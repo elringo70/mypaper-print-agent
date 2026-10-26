@@ -72,6 +72,7 @@ Type: files; Name: "{app}\mpa-ui.exe"
 [Files]
 Source: "{#TargetDir}\mpa.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#TargetDir}\mpa-desktop.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "setup-agent.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\vendor\pdfium\pdfium.dll"; DestDir: "{app}"; Flags: ignoreversion
 #if FileExists(AddBackslash(SourcePath) + WebView2Offline)
 Source: "{#WebView2Offline}"; DestDir: "{tmp}"; Flags: dontcopy deleteafterinstall
@@ -103,8 +104,83 @@ Filename: "{app}\mpa.exe"; Parameters: "autostart off"; Flags: runhidden waitunt
   RunOnceId: "RemoveAutostart"
 
 [Code]
+var
+  RolesPage: TWizardPage;
+  BwCombo, ColorCombo: TNewComboBox;
+
 const
   WEBVIEW2_CLIENT = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
+
+{ Las impresoras ya están instaladas: el agente no las crea, sólo necesita saber
+  cuál imprime en blanco y negro y cuál en color. }
+procedure LoadPrinters(Combo: TNewComboBox);
+var
+  TempFile: String;
+  Lines: TArrayOfString;
+  I: Integer;
+  ResultCode: Integer;
+begin
+  TempFile := ExpandConstant('{tmp}\mpa-printers.txt');
+  Exec(ExpandConstant('{cmd}'),
+       '/c powershell -NoProfile -Command "Get-Printer | Select-Object -ExpandProperty Name" > "' + TempFile + '"',
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  if LoadStringsFromFile(TempFile, Lines) then
+  begin
+    for I := 0 to GetArrayLength(Lines) - 1 do
+    begin
+      if Trim(Lines[I]) <> '' then
+        Combo.Items.Add(Trim(Lines[I]));
+    end;
+  end;
+  DeleteFile(TempFile);
+end;
+
+procedure InitializeWizard;
+var
+  Label1, Label2: TNewStaticText;
+begin
+  RolesPage := CreateCustomPage(wpSelectTasks, 'Impresoras',
+    'MyPaper no instala impresoras: usa las que ya tienes configuradas en Windows.');
+
+  Label1 := TNewStaticText.Create(RolesPage);
+  Label1.Parent := RolesPage.Surface;
+  Label1.Caption := 'Impresora para blanco y negro';
+  Label1.Top := 8;
+
+  BwCombo := TNewComboBox.Create(RolesPage);
+  BwCombo.Parent := RolesPage.Surface;
+  BwCombo.Style := csDropDownList;
+  BwCombo.Top := Label1.Top + Label1.Height + 6;
+  BwCombo.Width := RolesPage.SurfaceWidth;
+  LoadPrinters(BwCombo);
+
+  Label2 := TNewStaticText.Create(RolesPage);
+  Label2.Parent := RolesPage.Surface;
+  Label2.Caption := 'Impresora para color';
+  Label2.Top := BwCombo.Top + BwCombo.Height + 18;
+
+  ColorCombo := TNewComboBox.Create(RolesPage);
+  ColorCombo.Parent := RolesPage.Surface;
+  ColorCombo.Style := csDropDownList;
+  ColorCombo.Top := Label2.Top + Label2.Height + 6;
+  ColorCombo.Width := RolesPage.SurfaceWidth;
+  LoadPrinters(ColorCombo);
+
+  { Sin elección no se puede medir nada: si hay dos impresoras, la segunda es la
+    de color por defecto, que es como están montadas casi todas las papelerías. }
+  if BwCombo.Items.Count > 0 then BwCombo.ItemIndex := 0;
+  if ColorCombo.Items.Count > 1 then ColorCombo.ItemIndex := 1
+  else if ColorCombo.Items.Count = 1 then ColorCombo.ItemIndex := 0;
+end;
+
+function GetRoleParams(Param: String): String;
+begin
+  Result := '';
+  if BwCombo.ItemIndex >= 0 then
+    Result := Result + '-Bw "' + BwCombo.Text + '" ';
+  if ColorCombo.ItemIndex >= 0 then
+    Result := Result + '-Color "' + ColorCombo.Text + '"';
+end;
 
 function WebView2Installed: Boolean;
 var
@@ -122,26 +198,41 @@ var
   ResultCode: Integer;
   Installer: String;
 begin
-  if CurStep <> ssInstall then Exit;
-  if WebView2Installed then Exit;
-
-  Installer := ExpandConstant('{tmp}\MicrosoftEdgeWebview2RuntimeInstallerX64.exe');
-  if not FileExists(Installer) then
+  { Antes de copiar nada: el runtime del webview, porque sin él la ventana no
+    abre y el usuario se entera al final. }
+  if CurStep = ssInstall then
   begin
-    { Sin paquete offline no se puede resolver en silencio. Se avisa y se sigue:
-      Windows 10/11 recientes suelen traerlo, y el usuario puede instalarlo
-      después sin reinstalar el agente. }
-    MsgBox('No se encontró WebView2 Runtime y el paquete no incluye el instalador offline.' + #13#10 +
-           'La ventana no abrirá hasta instalarlo desde https://developer.microsoft.com/microsoft-edge/webview2/',
-           mbInformation, MB_OK);
+    if WebView2Installed then Exit;
+
+    Installer := ExpandConstant('{tmp}\MicrosoftEdgeWebview2RuntimeInstallerX64.exe');
+    if not FileExists(Installer) then
+    begin
+      MsgBox('No se encontró WebView2 Runtime y el paquete no incluye el instalador offline.' + #13#10 +
+             'La ventana no abrirá hasta instalarlo desde https://developer.microsoft.com/microsoft-edge/webview2/',
+             mbInformation, MB_OK);
+      Exit;
+    end;
+
+    WizardForm.StatusLabel.Caption := 'Instalando WebView2 Runtime…';
+    if (not Exec(Installer, '/silent /install', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)) or
+       (ResultCode <> 0) then
+      MsgBox('WebView2 Runtime no se pudo instalar (código ' + IntToStr(ResultCode) + ').' + #13#10 +
+             'La ventana del agente no abrirá hasta que esté instalado.', mbError, MB_OK);
     Exit;
   end;
 
-  WizardForm.StatusLabel.Caption := 'Instalando WebView2 Runtime…';
-  if (not Exec(Installer, '/silent /install', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)) or
-     (ResultCode <> 0) then
-    MsgBox('WebView2 Runtime no se pudo instalar (código ' + IntToStr(ResultCode) + ').' + #13#10 +
-           'La ventana del agente no abrirá hasta que esté instalado.', mbError, MB_OK);
+  { Después de copiar: roles y cola IPP. Crear la cola hace que Windows pregunte
+    al endpoint, así que el agente tiene que estar ya escuchando. }
+  if CurStep = ssPostInstall then
+  begin
+    WizardForm.StatusLabel.Caption := 'Configurando la cola MyPaper…';
+    if (not Exec('powershell.exe',
+                 '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\setup-agent.ps1') + '" ' + GetRoleParams(''),
+                 '', SW_HIDE, ewWaitUntilTerminated, ResultCode)) or (ResultCode <> 0) then
+      MsgBox('La cola MyPaper no quedó configurada (código ' + IntToStr(ResultCode) + ').' + #13#10 +
+             'El agente está instalado: vuelve a ejecutar setup-agent.ps1 en su carpeta para terminar.',
+             mbError, MB_OK);
+  end;
 end;
 
 function ShouldSkipPage(PageID: Integer): Boolean;
