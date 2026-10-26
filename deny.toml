@@ -1,0 +1,77 @@
+# License and supply-chain gate (ADR 0002).
+#
+# The rule is simple: nothing copyleft in the shipped binary. Ghostscript already
+# had to go for this reason; this file is what stops the next one from arriving
+# quietly in a dependency bump.
+
+[graph]
+# Every target: the gate is about what ships, and Windows-only crates count.
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+# Permissive licences, plus MPL-2.0 with a caveat:
+#
+#   MPL-2.0 is *file-level* copyleft. It obliges us to publish changes to those
+#   specific files, never to our own code, so shipping it in a closed product is
+#   fine as long as we do not patch them. It arrives via Tauri/wry (the Servo CSS
+#   parsing stack: cssparser, selectors, dtoa-short, cssparser-macros) and
+#   dwrote, which has no permissive alternative on Windows.
+#
+# Everything with a stronger claim — GPL, AGPL, LGPL, SSPL — stays denied. That
+# is the rule that mattered: it is what removed Ghostscript.
+allow = [
+    "MPL-2.0",
+    "NCSA",
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unlicense",
+    "CC0-1.0",
+    "0BSD",
+    "BSL-1.0",
+]
+
+[licenses.private]
+# Our own crates are unpublished and proprietary.
+ignore = true
+
+[bans]
+multiple-versions = "allow"
+# Every "wildcard" here is a local path dependency (mpa-* on mpa-*); nothing is
+# pulled from a registry without a version.
+wildcards = "allow"
+# A second copy of the same crate is a size problem, not a licence one; but a
+# wildcard or an unknown source is how supply-chain problems get in.
+
+[advisories]
+version = 2
+# Unmaintained, not vulnerable: no CVE, no unsafe code path of ours, and no
+# fixed version exists (cargo-deny reports "no safe upgrade"). Each one is
+# transitive through Tauri/wry or the retiring gpui shell. Re-check when those
+# bump, and delete the entry the moment it resolves.
+ignore = [
+    # gtk/glib stack, gpui on Linux and macOS only — never shipped on Windows.
+    "RUSTSEC-2024-0370", # proc-macro-error
+    "RUSTSEC-2024-0436", # paste (metal, macOS)
+    "RUSTSEC-2025-0052", # async-std (zed-async-tar)
+    "RUSTSEC-2024-0384", # instant
+    "RUSTSEC-2026-0173", # proc-macro-error2
+    # Tauri: HTML/font parsing and the Linux tray over DBus.
+    "RUSTSEC-2025-0134", # rustls-pemfile
+    "RUSTSEC-2026-0192", # ttf-parser
+    "RUSTSEC-2026-0206", # rustybuzz
+    "RUSTSEC-2026-0370", # zbus_names
+    "RUSTSEC-2026-0371", # zvariant
+    "RUSTSEC-2026-0372", # zvariant_derive
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

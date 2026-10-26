@@ -1,6 +1,7 @@
 [package]
 name = "mpa-desktop"
 version = "0.3.0"
+publish = false
 edition = "2021"
 
 # Same window, new shell: Tauri hosts the Svelte UI, the Rust core and the

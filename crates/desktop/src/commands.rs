@@ -11,8 +11,11 @@ use mpa_agent::AgentCore;
 use std::sync::Arc;
 use tauri::State;
 
-fn lock(core: &Arc<std::sync::Mutex<AgentCore>>) -> Result<std::sync::MutexGuard<'_, AgentCore>, String> {
-    core.lock().map_err(|_| "estado interno bloqueado".to_string())
+fn lock(
+    core: &Arc<std::sync::Mutex<AgentCore>>,
+) -> Result<std::sync::MutexGuard<'_, AgentCore>, String> {
+    core.lock()
+        .map_err(|_| "estado interno bloqueado".to_string())
 }
 
 fn data_url(png: &[u8]) -> String {
@@ -63,7 +66,10 @@ pub fn snapshot(state: State<'_, AppState>) -> Result<AppSnapshot, String> {
                     y: page.coverage.y,
                     k: page.coverage.k,
                     area_pct: page.area.map(|a| a.area_pct),
-                    class: page.area.and_then(|a| a.class).map(|c| c.as_str().to_string()),
+                    class: page
+                        .area
+                        .and_then(|a| a.class)
+                        .map(|c| c.as_str().to_string()),
                     tier_id: page.tier_id.clone(),
                     included: page.included,
                     thumbnail: data_url(&page.thumbnail_png),
@@ -133,11 +139,7 @@ pub fn complete_job(
 
 /// Cancel the job in the spooler; nothing is billed.
 #[tauri::command]
-pub fn cancel_job(
-    state: State<'_, AppState>,
-    printer: String,
-    job_id: u32,
-) -> Result<(), String> {
+pub fn cancel_job(state: State<'_, AppState>, printer: String, job_id: u32) -> Result<(), String> {
     let mut core = lock(&state.core)?;
     core.cancel_job(&printer, job_id).map_err(|e| e.to_string())
 }
@@ -178,7 +180,10 @@ pub fn doctor(state: State<'_, AppState>) -> Result<Vec<CheckDto>, String> {
         Ok(pairing) => CheckDto {
             name: "enlace".into(),
             health: "ok".into(),
-            detail: format!("{} · workspace {}", pairing.server_url, pairing.workspace_id),
+            detail: format!(
+                "{} · workspace {}",
+                pairing.server_url, pairing.workspace_id
+            ),
         },
         Err(_) => CheckDto {
             name: "enlace".into(),

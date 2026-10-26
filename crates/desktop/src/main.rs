@@ -19,8 +19,8 @@ use mpa_sync::{HttpTickets, PairingStore, SyncClient};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::menu::{Menu, MenuItem};
-use tauri::Manager;
 use tauri::tray::TrayIconBuilder;
+use tauri::Manager;
 
 pub struct AppState {
     pub core: Arc<Mutex<AgentCore>>,
@@ -75,9 +75,9 @@ fn main() {
             payload.plan.as_deref().unwrap_or("-"),
             payload.exp
         )),
-        mpa_sync::GateOutcome::NoToken => {
-            mpa_agent::log::warn("entitlement: sin token local; se opera sin control de plan".into())
-        }
+        mpa_sync::GateOutcome::NoToken => mpa_agent::log::warn(
+            "entitlement: sin token local; se opera sin control de plan".into(),
+        ),
         mpa_sync::GateOutcome::Blocked(reason) => {
             mpa_agent::log::warn(format!("entitlement bloqueado: {reason}"))
         }

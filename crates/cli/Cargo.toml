@@ -1,6 +1,7 @@
 [package]
 name = "mpa-cli"
 version = "0.3.0"
+publish = false
 edition = "2021"
 
 [[bin]]

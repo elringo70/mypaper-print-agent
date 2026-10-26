@@ -1,0 +1,52 @@
+name: CI
+
+# Runs on Windows because that is the only place the product actually exists:
+# the spool, GDI printing and the Tauri window are Win32 code. A green Linux
+# build here would prove nothing about what ships.
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  quality:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Fetch pdfium
+        shell: pwsh
+        run: ./packaging/fetch-pdfium.ps1
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      # mpa-desktop and mpa-ui carry a requireAdministrator manifest, so their
+      # test binaries cannot start from a non-elevated shell.
+      - name: Test
+        env:
+          MPA_PDFIUM: ${{ github.workspace }}\vendor\pdfium\pdfium.dll
+        run: cargo test --workspace --exclude mpa-desktop --exclude mpa-ui --locked
+
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses bans sources advisories
+          arguments: --all-features

@@ -1411,7 +1411,6 @@ fn analyze_command(
     Ok(())
 }
 
-
 /// Local analysis cache. One document measured once stays measured until the
 /// engine changes or the cap evicts it.
 fn cache_command(action: CacheAction) {
