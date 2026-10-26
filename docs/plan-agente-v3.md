@@ -71,6 +71,19 @@ Hoy `mpa ipp` es un proceso aparte. Pasa a ser el camino del agente:
 Aceptación: imprimir desde Word con el agente corriendo deja un trabajo visible en la
 ventana, sin consola y sin `--reprint` a mano.
 
+**Hecha.** `AgentCore::ingest_captured` construye el trabajo y reutiliza `record_analysis`,
+así que un documento capturado se mide, clasifica y tarifa igual que uno vigilado: un solo
+mapeo, dos entradas. `AgentRuntime::start_capture` levanta el endpoint con el agente y
+`mpa-desktop` lo ata al arrancar (puerto ocupado se registra, no mata el proceso). Los ids
+de trabajo van con el nombre de cola, así que no colisionan nunca con ids del spooler.
+
+Test por socket real: un PNG enviado como Print-Job aparece en `snapshot()` con una página,
+25 % de área y su archivo en disco.
+
+Falta de esta fase: el botón que autoriza. `complete_job` todavía asume un trabajo retenido
+en el spooler, así que para un trabajo capturado hay que saltarse cancelar/reanudar e ir
+directo a la reimpresión — eso es F2.
+
 ### F2 — Ventana de autorización (lo que muestra el screenshot)
 
 La ventana por trabajo, con la disposición del ejemplo:
