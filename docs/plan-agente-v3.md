@@ -102,6 +102,24 @@ La ventana por trabajo, con la disposición del ejemplo:
 Aceptación: cambiar de B/N a Color cambia el total con el precio del servidor, no con una
 cuenta local.
 
+**Hecha.** `authorize_captured` no cancela ni reanuda nada —no hay trabajo en el spooler—
+y siempre encola la reimpresión; se niega si el trabajo ya fue autorizado (cobraría dos
+veces) o si no hay documento en disco. `commands::quote` pide al servidor el precio de los
+dos juegos de reglas para las páginas incluidas, así que el total y el costo por página son
+del servidor y no de una cuenta local.
+
+La ventana quedó con el modo arriba a la derecha, total grande, tarifación por página con
+casillas y "seleccionar todas", vista previa con negro/color/blanco y la lista de tickets
+abiertos como destino.
+
+Verificado: dos tests de integración (captura medida; autorización encolada hacia la
+impresora de color con ticket, segundo intento rechazado), `svelte-check` 0/0 y el bundle
+nuevo `index-Bvq3vvZS` incrustado en `mpa-desktop.exe`.
+
+Falta: probarlo con una impresión real (el barrido del runtime es el que convierte
+`reprint_pending` en papel) y que la ventana muestre el error del servidor cuando no hay
+emparejamiento.
+
 ### F3 — Tickets abiertos en la ventana
 
 El agente ya refresca tickets cada 30 s; falta exponerlos en la ventana con los datos que
