@@ -12,6 +12,8 @@ pub struct Ticket {
     pub id: String,
     pub ticket_number: i32,
     pub cashier: String,
+    /// Customer name when the sale has one; most counter sales do not.
+    pub customer: Option<String>,
     pub total: f64,
 }
 
@@ -33,12 +35,14 @@ impl MockTickets {
                     id: "order-101".into(),
                     ticket_number: 101,
                     cashier: "Ana".into(),
+                    customer: Some("María López".into()),
                     total: 85.50,
                 },
                 Ticket {
                     id: "order-102".into(),
                     ticket_number: 102,
                     cashier: "Luis".into(),
+                    customer: None,
                     total: 12.00,
                 },
             ],

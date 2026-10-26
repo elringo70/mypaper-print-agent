@@ -84,6 +84,7 @@ pub fn snapshot(state: State<'_, AppState>) -> Result<AppSnapshot, String> {
             id: t.id.clone(),
             number: t.ticket_number,
             cashier: t.cashier.clone(),
+            customer: t.customer.clone(),
             total: t.total,
         })
         .collect();

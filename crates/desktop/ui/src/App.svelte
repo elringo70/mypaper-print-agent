@@ -373,7 +373,9 @@
 							<option value="unassigned">Sin asignar</option>
 							<option value="newDraft">Nuevo borrador</option>
 							{#each snapshot?.tickets ?? [] as t (t.id)}
-								<option value={`ticket:${t.id}`}>Ticket #{t.number} · {t.cashier} · ${t.total}</option>
+								<option value={`ticket:${t.id}`}>
+									#{t.number} · {t.customer ?? 'Sin cliente'} · {t.cashier} · ${t.total.toFixed(2)}
+								</option>
 							{/each}
 						</select>
 					</div>
@@ -390,12 +392,16 @@
 				</div>
 
 				<footer>
-					<button class="ghost" disabled={busy} onclick={() => finish(current, 'cancel')}>
+					<button
+						class="ghost"
+						disabled={busy || current.state !== 'Paused'}
+						onclick={() => finish(current, 'cancel')}
+					>
 						Cancelar
 					</button>
 					<button
 						class="primary"
-						disabled={busy || included(current) === 0}
+						disabled={busy || current.state !== 'Paused' || included(current) === 0}
 						onclick={() => finish(current, 'complete')}
 					>
 						Imprimir

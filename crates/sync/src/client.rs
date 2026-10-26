@@ -162,6 +162,10 @@ struct RemoteTicket {
     id: String,
     ticket_number: i32,
     cashier_id: String,
+    #[serde(default)]
+    cashier_name: Option<String>,
+    #[serde(default)]
+    customer_name: Option<String>,
     total: f64,
 }
 
@@ -454,7 +458,10 @@ impl SyncClient {
             .map(|t| mpa_agent::Ticket {
                 id: t.id,
                 ticket_number: t.ticket_number,
-                cashier: t.cashier_id,
+                // The name matters, not the id: this list is what the operator
+                // reads to pick a ticket.
+                cashier: t.cashier_name.unwrap_or(t.cashier_id),
+                customer: t.customer_name,
                 total: t.total,
             })
             .collect())

@@ -33,6 +33,8 @@ export interface TicketDto {
 	id: string;
 	number: number;
 	cashier: string;
+	/** Customer of the sale, when it has one. */
+	customer: string | null;
 	total: number;
 }
 

@@ -51,6 +51,8 @@ pub struct TicketDto {
     pub id: String,
     pub number: i32,
     pub cashier: String,
+    /// Customer of the sale, when it has one.
+    pub customer: Option<String>,
     pub total: f64,
 }
 
