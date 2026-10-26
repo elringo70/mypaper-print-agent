@@ -612,6 +612,23 @@ Pendiente de Fase 5: **instalación de prueba en una VM limpia** (Windows 10 y 1
 WebView2), descargar el runtime offline para el paquete definitivo, y la firma minisign
 del setup en el flujo de release.
 
+### Fase 6 — caché local de análisis (hecha)
+
+- Clave = `sha256(payload)` + versión del motor + dpi. Los umbrales viajan con la versión
+  del motor (cambiarlos la incrementa), así que dos reglas distintas nunca comparten
+  entrada y un cambio de motor no puede servir un número viejo.
+- Un JSON por documento en `%APPDATA%\mypaper-print-agent\analysis-cache`, escritura
+  atómica (tmp + rename), **LRU por mtime** con tope de 500 MB. Una entrada corrupta se
+  trata como ausencia: se vuelve a medir, nunca falla.
+- `analyze_spool` consulta la caché antes de renderizar: reimprimir un archivo o reenviar
+  un trabajo cuya subida falló cuesta cero.
+- `mpa cache stats | gc | clear`.
+
+Verificado: 6 tests nuevos en Linux y Windows (ida y vuelta con métricas y miniatura,
+clave que distingue contenido y dpi, entrada corrupta, LRU conserva la más reciente,
+clear, directorio ausente). Clippy del workspace completo limpio en Windows — de paso
+arreglé un `clone` redundante en `crates/ui` que **rompía el gate de release**.
+
 ## Primer entregable concreto
 
 Fase 1 con el test dorado corriendo sobre los 35 páginas del REA y el analizador sin
