@@ -629,6 +629,40 @@ clave que distingue contenido y dpi, entrada corrupta, LRU conserva la más reci
 clear, directorio ausente). Clippy del workspace completo limpio en Windows — de paso
 arreglé un `clone` redundante en `crates/ui` que **rompía el gate de release**.
 
+### Fase 7 — gate de licencias y supply chain (hecha)
+
+La regla que ya echó a Ghostscript ahora tiene dientes: `deny.toml` corre en CI y rompe
+el build ante una licencia fuera de la lista, un `wildcard`, un registry desconocido o
+un aviso sin parchear. Decisión y alternativas en `docs/adr/0002-licencias.md`.
+
+- MPL-2.0 se permite con la salvedad escrita: copyleft **a nivel de archivo**, entra por
+  Tauri/wry (pila CSS de Servo) y `dwrote`, y no obliga a nada sobre el código propio
+  mientras no se parcheen esos archivos. GPL/AGPL/LGPL/SSPL siguen denegadas.
+- Avisos de crates sin mantenimiento ignorados **por ID y con razón escrita**, no en
+  bloque.
+- CI (`.github/workflows/ci.yml`): job Windows para `fmt`, `clippy` y tests — es la única
+  plataforma donde el producto existe; job Ubuntu para `cargo-deny`.
+- `analysis_budget.rs`: páginas A4 a 150 dpi por la entrada real, con presupuesto holgado
+  que atrapa trabajo O(n²) sin fallar en CI. Medido: 322 ms para 4 páginas en debug
+  (80 ms/página).
+
+**Lo que encontró el gate al ejecutarse por primera vez:**
+
+```
+RUSTSEC-2026-0382  rustls-webpki 0.103.15  vulnerabilidad
+  acepta rutas de certificados con intermedios emSign cuya clave privada es
+  pública -> subido a 0.103.16
+```
+
+Estaba en la ruta de **todas** las peticiones firmadas a MyPaper. Ninguna revisión a ojo
+lo había visto.
+
+Estado: `advisories ok, bans ok, licenses ok, sources ok`; Windows `fmt` limpio,
+`clippy -D warnings` limpio, 147 tests en 22 suites sin fallos.
+
+Queda de la fase 7 sólo el **piloto en sombra** en la papelería, que necesita impresiones
+reales.
+
 ## Primer entregable concreto
 
 Fase 1 con el test dorado corriendo sobre los 35 páginas del REA y el analizador sin
