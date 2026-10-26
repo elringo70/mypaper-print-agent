@@ -569,6 +569,24 @@ Falta de Fase 4: compilar el frontend (`npm install && npm run build` en
 binario arranca y retiene trabajos, así que no debe lanzarse mientras alguien imprima—;
 bandeja del sistema, autoarranque, selección de destino/ticket y presets en la UI.
 
+#### Fase 4 — segundo corte (hecho)
+
+- Bandeja del sistema: menú Abrir / Salir. Cerrar la ventana la oculta y el agente sigue
+  reteniendo trabajos; salir es una acción explícita.
+- Destino por trabajo: ticket abierto (lista viva) o borrador nuevo.
+- Preset de impresión y modo B/N · Color por trabajo — el modo decide qué conjunto de
+  reglas pone precio.
+- Los tickets se refrescan en un hilo aparte cada 30 s, **fuera del lock**: la ventana
+  sondea cada segundo y no puede esperar a un HTTP.
+- `svelte.config.js` para que svelte-check cargue la configuración del plugin.
+
+Verificado en el espejo: build limpio, `clippy -D warnings` limpio, **svelte-check 0
+errores**, y el binario incrusta el bundle nuevo (clave `index-BhXtO_6j` presente).
+
+Sigue pendiente: primera ejecución supervisada en la máquina, autoarranque (queda en el
+instalador, que ya registra la tarea elevada) y paridad fina con gpui (detalles de
+presentación de páginas).
+
 ## Primer entregable concreto
 
 Fase 1 con el test dorado corriendo sobre los 35 páginas del REA y el analizador sin
