@@ -634,6 +634,21 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 /// Serve until the listener fails. One job at a time: measuring is fast and a
 /// copy shop prints sequentially.
 pub fn serve(listener: TcpListener, out_dir: PathBuf, port: u16) -> Result<(), IppError> {
+    serve_with(listener, out_dir, port, |_, _| {})
+}
+
+/// Same, but tells the caller about every stored document. The protocol crate
+/// stays free of measuring and printing policy: whoever runs it decides what a
+/// captured job means.
+pub fn serve_with<F>(
+    listener: TcpListener,
+    out_dir: PathBuf,
+    port: u16,
+    mut on_job: F,
+) -> Result<(), IppError>
+where
+    F: FnMut(&ReceivedJob, &Path),
+{
     let mut next_job: u32 = 1;
     let mut seen: u32 = 0;
     for stream in listener.incoming() {
@@ -702,6 +717,10 @@ pub fn serve(listener: TcpListener, out_dir: PathBuf, port: u16) -> Result<(), I
                 }
             );
 
+            // The document is on disk before the client is answered, but
+            // measuring and printing it happen after: the client is waiting on
+            // this response and a 300 dpi render is not its problem.
+            let mut stored: Option<(ReceivedJob, PathBuf)> = None;
             if let Some(job) = &handled.job {
                 match save_job(&out_dir, job) {
                     Ok(path) => {
@@ -710,6 +729,7 @@ pub fn serve(listener: TcpListener, out_dir: PathBuf, port: u16) -> Result<(), I
                             path.display(),
                             job.document.len()
                         );
+                        stored = Some((job.clone(), path));
                         next_job += 1;
                     }
                     Err(e) => println!("ipp: {e}"),
@@ -726,6 +746,10 @@ pub fn serve(listener: TcpListener, out_dir: PathBuf, port: u16) -> Result<(), I
             response.extend_from_slice(&handled.response);
             stream.write_all(&response)?;
             stream.flush()?;
+
+            if let Some((job, path)) = stored {
+                on_job(&job, &path);
+            }
         }
     }
     Ok(())

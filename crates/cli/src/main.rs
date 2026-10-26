@@ -128,6 +128,9 @@ enum Commands {
         /// Where received documents are written.
         #[arg(long)]
         dir: Option<std::path::PathBuf>,
+        /// Print every captured job to this printer, after measuring it.
+        #[arg(long)]
+        reprint: Option<String>,
     },
     /// Local analysis cache: stats | gc | clear.
     Cache {
@@ -614,8 +617,8 @@ fn run() -> Result<(), AppError> {
         Commands::Tiers { action } => {
             tiers_command(action, config_override)?;
         }
-        Commands::Ipp { port, dir } => {
-            ipp_command(port, dir)?;
+        Commands::Ipp { port, dir, reprint } => {
+            ipp_command(port, dir, reprint)?;
         }
         Commands::Cache { action } => {
             cache_command(action);
@@ -1426,7 +1429,11 @@ fn analyze_command(
 /// Capture endpoint. Windows' inbox IPP Class Driver renders the job and sends
 /// PDF, so what lands here is the document itself, whatever application printed
 /// it.
-fn ipp_command(port: u16, dir: Option<std::path::PathBuf>) -> Result<(), AppError> {
+fn ipp_command(
+    port: u16,
+    dir: Option<std::path::PathBuf>,
+    reprint: Option<String>,
+) -> Result<(), AppError> {
     let out = dir.unwrap_or_else(|| {
         mpa_agent::cache::default_cache_dir()
             .parent()
@@ -1445,7 +1452,74 @@ fn ipp_command(port: u16, dir: Option<std::path::PathBuf>) -> Result<(), AppErro
         "     Add-Printer -Name \"MyPaper\" -DriverName \"Microsoft IPP Class Driver\" -PortName \"http://127.0.0.1:{port}{}\"",
         mpa_ipp::PRINT_PATH
     );
-    mpa_ipp::serve(listener, out, port).map_err(|e| AppError::Entitlement(e.to_string()))
+    if let Some(printer) = &reprint {
+        println!("ipp: cada trabajo se medira y saldra por {printer}");
+    } else {
+        println!("ipp: sólo captura (sin --reprint no se imprime nada)");
+    }
+
+    mpa_ipp::serve_with(listener, out, port, |job, path| {
+        ipp_job(job, path, reprint.as_deref());
+    })
+    .map_err(|e| AppError::Entitlement(e.to_string()))
+}
+
+/// What happens to a captured job: measure it, say so, and — if the operator
+/// named a printer — send the same bytes on to it.
+///
+/// The order matters. Measuring first means the numbers describe what will be
+/// printed; and a failure to measure must never stop the customer's job, so the
+/// reprint runs either way.
+fn ipp_job(job: &mpa_ipp::ReceivedJob, path: &std::path::Path, reprint_to: Option<&str>) {
+    println!("ipp: {} -> {}", job.name, path.display());
+    match mpa_analyzer::analyze_bytes(&job.document) {
+        Ok(analysis) => {
+            let mut pages = Vec::new();
+            for page in &analysis.pages {
+                let c = &page.coverage;
+                println!(
+                    "  pagina {}\tC={:.2} M={:.2} Y={:.2} K={:.2}\tclase={:?}",
+                    page.page_no,
+                    c.c,
+                    c.m,
+                    c.y,
+                    c.k,
+                    page.metrics.as_ref().map(|m| m.class)
+                );
+                pages.push(page.page_no);
+            }
+            if let Some(printer) = reprint_to {
+                reprint(&job.document, analysis.format, &pages, printer);
+            }
+        }
+        Err(e) => {
+            // Unmeasurable is not unprintable: the sheet still has to come out.
+            println!("ipp: no se pudo medir: {e}");
+            if let Some(printer) = reprint_to {
+                // Without a measurement the page count is unknown; ask the PDF
+                // itself rather than printing one page of a fifty-page job.
+                let count = mpa_analyzer::pdf::page_count(&job.document).unwrap_or(1);
+                let all: Vec<u32> = (1..=count as u32).collect();
+                reprint(&job.document, mpa_analyzer::SpoolFormat::Pdf, &all, printer);
+            }
+        }
+    }
+}
+
+/// Render at 300 dpi and hand the pages to the printer: what is measured and
+/// what the customer receives are the same pixels.
+fn reprint(document: &[u8], format: mpa_analyzer::SpoolFormat, pages: &[u32], printer: &str) {
+    let images = match mpa_analyzer::render_pages(document, format, pages, 300) {
+        Ok(images) => images,
+        Err(e) => {
+            println!("ipp: no se pudo renderizar para imprimir: {e}");
+            return;
+        }
+    };
+    match mpa_analyzer::print_images(printer, &images, 300) {
+        Ok(()) => println!("ipp: enviado a {printer} ({} página/s)", images.len()),
+        Err(e) => println!("ipp: no se pudo imprimir en {printer}: {e}"),
+    }
 }
 
 /// Local analysis cache. One document measured once stays measured until the

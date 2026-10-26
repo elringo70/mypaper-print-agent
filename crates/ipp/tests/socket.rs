@@ -176,3 +176,49 @@ fn a_chunked_body_arrives_whole() {
     assert_eq!(std::fs::read(&saved[0]).expect("read"), document);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn every_stored_document_reaches_the_caller() {
+    // The flow that matters for the product: the endpoint answers the client and
+    // then hands the document to whoever runs it, which measures and reprints.
+    let dir = workdir("callback");
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let out = dir.clone();
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        // Runs until the process ends; the test only needs the first job.
+        let _ = mpa_ipp::serve_with(listener, out, port, move |job, path| {
+            let _ = tx.send((job.name.clone(), path.to_path_buf(), job.document.clone()));
+        });
+    });
+
+    let document = b"%PDF-1.7 callback";
+    let body = print_job(document);
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("timeout");
+    stream
+        .write_all(
+            format!(
+                "POST /ipp/print HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/ipp\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            )
+            .as_bytes(),
+        )
+        .expect("head");
+    stream.write_all(&body).expect("body");
+
+    let text = read_one_response(&mut stream);
+    assert!(text.starts_with("HTTP/1.1 200"), "got {text:?}");
+
+    let (name, path, received) = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the caller must be told about the document");
+    assert_eq!(name, "socket.pdf");
+    assert_eq!(received, document);
+    assert!(path.exists(), "the file is on disk before the caller runs");
+    let _ = std::fs::remove_dir_all(&dir);
+}
