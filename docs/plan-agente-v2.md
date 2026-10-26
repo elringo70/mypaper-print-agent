@@ -679,8 +679,18 @@ su IPP Class Driver y, al anunciar sólo `application/pdf`, entrega el documento
 - Si medir falla el trabajo igual sale: se pide el número de páginas al PDF en vez de
   imprimir una de cincuenta.
 
-Pendiente: registrar el cobro contra MyPaper desde este flujo, y que `mpa ipp` corra como
-tarea elevada en vez de a mano.
+**Cobro registrado** (misma fase): `billing::draft_for` mapea la medición al mismo
+`OutboxEntry` que manda el watcher del spool, así un documento cuesta igual por donde
+llegue. La clave de idempotencia es el hash del contenido: reenviar tras un fallo de red
+no cobra dos veces. El `print-color-mode` del cliente elige el juego de reglas B/N o color.
+
+Verificado contra el POS local con un emparejamiento real: el documento de Word de 885 KB
+generó el borrador `93442f16`, 6 páginas, modo COLOR, total 39.00, líneas 3.00 / 4.50 /
+13.00 / 4.50 / 3.00 / 11.00. La página en blanco pagó sólo el recargo de hoja (3.00), sin
+tóner.
+
+Pendiente: reintento automático del registro cuando el servidor no responde (hoy se avisa
+y el trabajo queda en el inbox), y que `mpa ipp` corra como tarea elevada en vez de a mano.
 
 ## Primer entregable concreto
 
