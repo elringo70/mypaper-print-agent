@@ -99,7 +99,7 @@ fn platform_print(printer: &str, pages: &[RgbaImage], dpi: u32) -> Result<(), Pr
 
             // 32bpp BITMAPINFO is BGRA; the alpha byte is padding here.
             let mut bgra = page.as_raw().clone();
-            for px in bgra.chunks_exact_mut(4) {
+            for px in bgra.as_chunks_mut::<4>().0 {
                 px.swap(0, 2);
                 px[3] = 255;
             }

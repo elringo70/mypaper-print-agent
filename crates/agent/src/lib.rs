@@ -1,6 +1,7 @@
 pub mod audit;
 pub mod config;
 pub mod core;
+pub mod gate;
 pub mod log;
 pub mod persist;
 pub mod reprint;

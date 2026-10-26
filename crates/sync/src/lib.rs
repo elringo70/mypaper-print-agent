@@ -11,7 +11,8 @@ pub use client::{
 };
 pub use drain::{drain_outbox, DrainReport};
 pub use entitlement::{
-    has_feature, verify as verify_entitlement, ClockGuard, EntitlementError, EntitlementPayload,
+    apply_gate, has_feature, verify as verify_entitlement, ClockGuard, EntitlementError,
+    EntitlementPayload, GateOutcome,
 };
 pub use pairing::{PairingError, PairingStore};
 pub use tickets::HttpTickets;

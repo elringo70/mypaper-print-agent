@@ -24,7 +24,7 @@ fn main() {
     let raw = img.as_raw();
     let mut nonwhite = 0usize;
     let mut sum = [0u64; 3];
-    for px in raw.chunks_exact(4) {
+    for px in raw.as_chunks::<4>().0 {
         if px[0] < 248 || px[1] < 248 || px[2] < 248 {
             nonwhite += 1;
         }

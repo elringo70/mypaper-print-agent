@@ -172,6 +172,15 @@ fn hold_and_analyze(
     printer: &str,
     job_id: u32,
 ) {
+    // A blocked device must not pause anything. Holding a job it cannot price
+    // would leave a customer waiting for a print they already paid for, so the
+    // job is allowed through unmanaged and only the log records why.
+    if let Some(reason) = crate::gate::reason() {
+        crate::log::warn(format!(
+            "bloqueado ({reason}): {printer} job {job_id} pasa sin gestionar"
+        ));
+        return;
+    }
     let pause = match detect(backend, printer, job_id) {
         Ok(detected) => core
             .lock()

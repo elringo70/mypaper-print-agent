@@ -32,6 +32,7 @@ fn seed_demo_job(core: &mut AgentCore) {
             tier_id: Some(if page_no == 4 { "FOTO" } else { "COLOR50" }.into()),
             included: true,
             thumbnail_png: page_png.clone(),
+            area: None,
         })
         .collect();
     core.adopt_job(mpa_agent::WatchedJob {
@@ -104,6 +105,30 @@ fn main() {
     let _ = save_to(&core, &state_path);
 
     mpa_agent::log::info(format!("starting mpa-ui v{}", env!("CARGO_PKG_VERSION")));
+
+    // Offline entitlement: publish the answer process-wide before the watcher
+    // starts, so a blocked device never pauses a job. Same helper the CLI uses.
+    let gate_dir = cfg_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_default();
+    let gate_now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    match mpa_sync::entitlement::apply_gate(&gate_dir, gate_now) {
+        mpa_sync::GateOutcome::Allowed(payload) => mpa_agent::log::info(format!(
+            "entitlement: plan {} hasta {}",
+            payload.plan.as_deref().unwrap_or("-"),
+            payload.exp
+        )),
+        mpa_sync::GateOutcome::NoToken => mpa_agent::log::warn(
+            "entitlement: sin token local; se opera sin control de plan".into(),
+        ),
+        mpa_sync::GateOutcome::Blocked(reason) => {
+            mpa_agent::log::warn(format!("entitlement bloqueado: {reason}"))
+        }
+    }
 
     let core = Arc::new(Mutex::new(core));
     let runtime = AgentRuntime::start(Arc::clone(&core), policy, Duration::from_millis(2000));

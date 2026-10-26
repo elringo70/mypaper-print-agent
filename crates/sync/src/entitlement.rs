@@ -51,6 +51,8 @@ pub enum EntitlementError {
     Signature,
     #[error("no entitlement public key configured in this build")]
     NoPublicKey,
+    #[error("no entitlement token on this device: run `mpa entitlement`")]
+    NoToken,
     #[error("system clock is behind the last instant this install saw ({seen}); refusing")]
     ClockRollback { seen: i64 },
 }
@@ -120,6 +122,60 @@ pub fn verify_with_public(
 
 pub fn has_feature(payload: &EntitlementPayload, feature: &str) -> bool {
     payload.features.iter().any(|f| f == feature)
+}
+
+/// File names the agent keeps next to its config.
+pub const TOKEN_FILE: &str = "entitlement.jwt";
+pub const GUARD_FILE: &str = "entitlement-guard.json";
+
+/// Authorize from the files this installation already has.
+///
+/// `config_dir` is the directory holding `config.toml`; the token and the
+/// clock mark live beside it. Returns the payload when the device may work, and
+/// a reason when it may not — the caller decides what "blocked" means, because
+/// only it knows how to leave a customer's job unmanaged instead of trapped.
+pub fn authorize_local(
+    config_dir: &std::path::Path,
+    now: i64,
+) -> Result<EntitlementPayload, EntitlementError> {
+    let token = std::fs::read_to_string(config_dir.join(TOKEN_FILE))
+        .map_err(|_| EntitlementError::NoToken)?;
+    let guard_path = config_dir.join(GUARD_FILE);
+    let mut guard = ClockGuard::load(&guard_path);
+    let payload = guard.authorize(token.trim(), now)?;
+    guard.save(&guard_path);
+    Ok(payload)
+}
+
+/// What the startup check concluded.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GateOutcome {
+    /// A valid token: the device may bill until `payload.exp`.
+    Allowed(EntitlementPayload),
+    /// No token on disk. Not an error while the feature rolls out: the device
+    /// keeps working and the caller should say so out loud.
+    NoToken,
+    /// A token exists and does not authorize: expired, tampered, foreign key,
+    /// or the clock moved backwards.
+    Blocked(String),
+}
+
+/// Evaluate the offline entitlement and publish the answer to
+/// [`mpa_agent::gate`], which both watchers consult before pausing a job.
+///
+/// Transition rule: "no token" keeps the old behaviour so an installation that
+/// predates the feature is not bricked; anything else that fails blocks.
+pub fn apply_gate(config_dir: &std::path::Path, now: i64) -> GateOutcome {
+    let outcome = match authorize_local(config_dir, now) {
+        Ok(payload) => GateOutcome::Allowed(payload),
+        Err(EntitlementError::NoToken) => GateOutcome::NoToken,
+        Err(e) => GateOutcome::Blocked(e.to_string()),
+    };
+    match &outcome {
+        GateOutcome::Blocked(reason) => mpa_agent::gate::set(Some(reason.clone())),
+        _ => mpa_agent::gate::set(None),
+    }
+    outcome
 }
 
 /// High-water mark of the wall clock, so a rolled-back clock is visible.
@@ -256,7 +312,10 @@ mod tests {
     #[test]
     fn a_token_from_another_key_does_not() {
         let other = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-        assert!(check(&valid_token(), 1_700_000_000).is_ok(), "the honest key works");
+        assert!(
+            check(&valid_token(), 1_700_000_000).is_ok(),
+            "the honest key works"
+        );
         assert!(verify_with_public(&valid_token(), 1_700_000_000, other).is_err());
     }
 

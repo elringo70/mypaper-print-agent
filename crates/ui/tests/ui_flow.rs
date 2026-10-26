@@ -227,6 +227,7 @@ fn adopt_analyzed_job(core: &Arc<Mutex<AgentCore>>, job_id: u32, document: &str)
             tier_id: Some("t6".into()),
             included: true,
             thumbnail_png: Vec::new(),
+            area: None,
         }],
         analysis_error: None,
         warnings: Vec::new(),

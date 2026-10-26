@@ -170,7 +170,7 @@ pub fn analyze_rgba_with(
     let mut s_lum = 0.0f64;
     let mut s_chroma = 0.0f64;
 
-    for px in rgba.chunks_exact(4) {
+    for px in rgba.as_chunks::<4>().0 {
         let r = px[0] as f64 / 255.0;
         let g = px[1] as f64 / 255.0;
         let b = px[2] as f64 / 255.0;

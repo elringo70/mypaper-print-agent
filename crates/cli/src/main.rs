@@ -536,6 +536,7 @@ fn run() -> Result<(), AppError> {
             }
         }
         Commands::Watch { quantum_ms } => {
+            apply_entitlement();
             watch_loop(
                 backend,
                 cli.config,
@@ -1392,6 +1393,38 @@ fn analyze_command(
     Ok(())
 }
 
+/// Evaluate the offline entitlement once, before any job can be paused.
+///
+/// The decision itself lives in `mpa_sync::entitlement::apply_gate` so the UI
+/// runtime reaches exactly the same conclusion.
+fn apply_entitlement() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let dir = match mpa_agent::config_path(None) {
+        Ok(path) => path.parent().map(|p| p.to_path_buf()).unwrap_or_default(),
+        Err(e) => {
+            mpa_agent::gate::set(Some(format!("config no disponible: {e}")));
+            eprintln!("bloqueado: config no disponible ({e})");
+            return;
+        }
+    };
+    match mpa_sync::entitlement::apply_gate(&dir, now) {
+        mpa_sync::GateOutcome::Allowed(payload) => println!(
+            "plan {} · vence {} ({} h)",
+            payload.plan.as_deref().unwrap_or("-"),
+            payload.exp,
+            (payload.exp - now).max(0) / 3600
+        ),
+        mpa_sync::GateOutcome::NoToken => eprintln!(
+            "aviso: sin token de entitlement; se opera sin control de plan. \
+             Ejecuta `mpa entitlement` con el servidor disponible."
+        ),
+        mpa_sync::GateOutcome::Blocked(reason) => eprintln!("bloqueado: {reason}"),
+    }
+}
+
 /// One thread per watched printer: wait for arrivals, pause immediately,
 /// track the domain state. Ctrl-C stops the process (Phase 2 adds a tray
 /// service with graceful shutdown).
@@ -1446,6 +1479,12 @@ fn watch_printer(
             None => continue,
             Some(job_id) => {
                 if !seen.insert(job_id) {
+                    continue;
+                }
+                // Blocked: the job prints unmanaged. Pausing it would hold a
+                // customer's print hostage to a subscription.
+                if let Some(reason) = mpa_agent::gate::reason() {
+                    eprintln!("bloqueado ({reason}): {printer} job {job_id} pasa sin gestionar");
                     continue;
                 }
                 states.insert(job_id, JobState::Detected);
