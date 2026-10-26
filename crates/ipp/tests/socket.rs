@@ -222,3 +222,37 @@ fn every_stored_document_reaches_the_caller() {
     assert!(path.exists(), "the file is on disk before the caller runs");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn the_job_name_survives_create_job_to_send_document() {
+    // Windows names the job on Create-Job and omits job-name on the
+    // Send-Document that carries the bytes. Without carrying the name over, the
+    // operator sees "job-1" instead of the document they printed.
+    let mut names = std::collections::HashMap::new();
+
+    let mut create = vec![0x02, 0x00];
+    create.extend_from_slice(&0x0005u16.to_be_bytes()); // Create-Job
+    create.extend_from_slice(&1u32.to_be_bytes());
+    create.push(0x01);
+    create.extend(attribute(0x47, "attributes-charset", b"utf-8"));
+    create.extend(attribute(
+        0x42,
+        "job-name",
+        b"Microsoft Word - cotizacion.docx",
+    ));
+    create.push(0x03);
+    mpa_ipp::handle_with(&create, mpa_ipp::DEFAULT_PORT, 7, &mut names).expect("create");
+
+    let mut send = vec![0x02, 0x00];
+    send.extend_from_slice(&0x0006u16.to_be_bytes()); // Send-Document
+    send.extend_from_slice(&2u32.to_be_bytes());
+    send.push(0x01);
+    send.extend(attribute(0x47, "attributes-charset", b"utf-8"));
+    send.push(0x03);
+    send.extend_from_slice(b"%PDF-1.7 body");
+    let handled = mpa_ipp::handle_with(&send, mpa_ipp::DEFAULT_PORT, 7, &mut names).expect("send");
+
+    let job = handled.job.expect("document");
+    assert_eq!(job.name, "Microsoft Word - cotizacion.docx");
+    assert_eq!(job.document, b"%PDF-1.7 body");
+}

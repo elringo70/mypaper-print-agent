@@ -417,6 +417,21 @@ fn job_attributes(port: u16, id: u32, name: &str, state: u32) -> Vec<u8> {
 /// Handle one IPP POST body. Pure on purpose: the socket loop stays trivial and
 /// the protocol is testable without a network.
 pub fn handle(body: &[u8], port: u16, job_id: u32) -> Result<Handled, IppError> {
+    handle_with(body, port, job_id, &mut std::collections::HashMap::new())
+}
+
+/// Same, remembering job names across requests on one connection.
+///
+/// Windows sends `job-name` on Create-Job and omits it on the Send-Document that
+/// actually carries the document, so without this the operator sees "job-1"
+/// instead of the file they printed — and that is the name that reaches the
+/// ticket.
+pub fn handle_with(
+    body: &[u8],
+    port: u16,
+    job_id: u32,
+    names: &mut std::collections::HashMap<u32, String>,
+) -> Result<Handled, IppError> {
     let mut request = Request::parse(body)?;
     let (major, minor) = (request.major, request.minor);
     let request_id = request.request_id;
@@ -446,8 +461,12 @@ pub fn handle(body: &[u8], port: u16, job_id: u32) -> Result<Handled, IppError> 
             (out, None)
         }
         OP_CREATE_JOB | OP_PRINT_JOB | OP_SEND_DOCUMENT => {
-            let name = request
-                .text("job-name")
+            if let Some(name) = request.text("job-name") {
+                names.insert(job_id, name);
+            }
+            let name = names
+                .get(&job_id)
+                .cloned()
                 .unwrap_or_else(|| format!("job-{job_id}"));
             let format = request
                 .text("document-format")
@@ -656,6 +675,7 @@ where
 {
     let mut next_job: u32 = 1;
     let mut seen: u32 = 0;
+    let mut job_names: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
     for stream in listener.incoming() {
         let mut stream = stream?;
         // A client may reuse the connection for several operations; keep
@@ -704,7 +724,7 @@ where
                 break;
             }
 
-            let handled = match handle(&request.body, port, next_job) {
+            let handled = match handle_with(&request.body, port, next_job, &mut job_names) {
                 Ok(handled) => handled,
                 Err(e) => {
                     println!("ipp: {e}");
