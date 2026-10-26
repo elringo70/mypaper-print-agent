@@ -840,6 +840,66 @@ impl AgentCore {
         Ok(self.record_detected(printer, job_id, detected))
     }
 
+    /// A job captured by our own IPP queue enters the same job map the window
+    /// reads, already analysed.
+    ///
+    /// Unlike the spool watcher there is nothing to pause: Windows handed us the
+    /// document and considers it printed. The operator's authorisation is what
+    /// releases it, and the PDF is already on disk, so a restart loses nothing.
+    pub fn ingest_captured(
+        &mut self,
+        printer: &str,
+        job_id: u32,
+        document: String,
+        data: &[u8],
+        spool_path: Option<PathBuf>,
+    ) -> Result<(), AgentError> {
+        self.jobs.insert(
+            (printer.to_string(), job_id),
+            WatchedJob {
+                printer: printer.into(),
+                job_id,
+                document,
+                // Held by us, waiting for the operator: the closest state the
+                // spool vocabulary has, and what the window already renders.
+                state: JobState::Paused,
+                pages: Vec::new(),
+                analysis_error: None,
+                warnings: Vec::new(),
+                target: TargetSelection::Unassigned,
+                format: None,
+                spool_path: None,
+                print_mode: PrintMode::Bw,
+                preset: None,
+            },
+        );
+        self.bump();
+
+        // Reuse the spool path's own mapping so a captured document is measured,
+        // labelled and priced exactly like a watched one.
+        let result = match mpa_analyzer::analyze_bytes(data) {
+            Ok(analysis) => Ok(AnalyzedSpool {
+                format: analysis.format,
+                pages: analysis
+                    .pages
+                    .into_iter()
+                    .map(|page| AnalyzedPage {
+                        page_no: page.page_no,
+                        coverage: page.coverage,
+                        thumbnail_png: page.thumbnail_png,
+                        metrics: page.metrics,
+                    })
+                    .collect(),
+                spool_path,
+            }),
+            Err(e) => Err(AnalysisFailure {
+                message: e.to_string(),
+                error: e.into(),
+            }),
+        };
+        self.record_analysis(printer, job_id, result)
+    }
+
     /// Apply an analysis pass performed by `analyze_spool`. Brief lock only:
     /// Ghostscript already ran outside it.
     pub fn record_analysis(

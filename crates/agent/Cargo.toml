@@ -9,6 +9,7 @@ chrono = "0.4"
 mpa-domain = { path = "../domain" }
 mpa-spool = { path = "../spool" }
 mpa-analyzer = { path = "../analyzer", features = ["pdfium"] }
+mpa-ipp = { path = "../ipp" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"

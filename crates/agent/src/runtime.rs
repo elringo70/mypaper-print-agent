@@ -17,6 +17,10 @@ pub struct AgentRuntime {
     threads: Vec<JoinHandle<()>>,
 }
 
+/// Queue label for captured jobs. Distinct from any spooler printer name on
+/// purpose: it is the key half of (printer, job_id).
+pub const CAPTURE_PRINTER: &str = "MyPaper";
+
 impl std::fmt::Debug for AgentRuntime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AgentRuntime")
@@ -45,6 +49,45 @@ impl AgentRuntime {
             stop,
             threads,
         }
+    }
+
+    /// Feed the agent from our own IPP queue.
+    ///
+    /// This is the capture path that replaced watching a physical printer: the
+    /// document arrives as PDF, already in the format the analyzer measures, and
+    /// enters the same job map the window reads. Windows considers the job
+    /// printed; the operator's authorisation is what puts it on paper.
+    pub fn start_capture(
+        &mut self,
+        listener: std::net::TcpListener,
+        inbox: std::path::PathBuf,
+        port: u16,
+    ) -> Result<(), std::io::Error> {
+        let core = Arc::clone(&self.core);
+        // Job ids are scoped by printer name, so the queue label keeps them
+        // from ever colliding with spooler ids.
+        let mut next: u32 = 1;
+        std::thread::Builder::new()
+            .name("mpa-ipp".into())
+            .spawn(move || {
+                let result = mpa_ipp::serve_with(listener, inbox, port, |job, path| {
+                    let mut core = core.lock().expect("agent core");
+                    if let Err(e) = core.ingest_captured(
+                        CAPTURE_PRINTER,
+                        next,
+                        job.name.clone(),
+                        &job.document,
+                        Some(path.to_path_buf()),
+                    ) {
+                        eprintln!("mpa: captura {next}: {e}");
+                    }
+                    next = next.saturating_add(1);
+                });
+                if let Err(e) = result {
+                    eprintln!("mpa: endpoint IPP detenido: {e}");
+                }
+            })?;
+        Ok(())
     }
 
     pub fn core(&self) -> Arc<Mutex<AgentCore>> {

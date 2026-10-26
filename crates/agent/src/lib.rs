@@ -25,4 +25,5 @@ pub use reprint::{
     attempt_reprint, spool_cache_dir, sweep_one_reprint, ReprintError, SweepOutcome,
 };
 pub use runtime::AgentRuntime;
+pub use runtime::CAPTURE_PRINTER;
 pub use tickets::{MockTickets, Ticket, TicketError, TicketSource};

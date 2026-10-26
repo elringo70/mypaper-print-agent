@@ -17,6 +17,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 mpa-domain = { path = "../domain" }
 mpa-agent = { path = "../agent" }
+mpa-ipp = { path = "../ipp" }
 mpa-spool = { path = "../spool" }
 mpa-sync = { path = "../sync" }
 mpa-update = { path = "../update" }

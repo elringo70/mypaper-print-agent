@@ -84,7 +84,34 @@ fn main() {
     }
 
     let core = Arc::new(Mutex::new(core));
-    let runtime = AgentRuntime::start(Arc::clone(&core), policy, Duration::from_millis(2000));
+    let mut runtime = AgentRuntime::start(Arc::clone(&core), policy, Duration::from_millis(2000));
+
+    // Capture endpoint. This is the path that replaced watching the physical
+    // printer: Windows renders the job and hands it over as PDF. A busy port is
+    // reported, not fatal — the spool watcher keeps working while it is fixed.
+    let inbox = mpa_agent::config::config_path(None)
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("ipp-inbox")))
+        .unwrap_or_else(std::env::temp_dir);
+    match std::net::TcpListener::bind(("127.0.0.1", mpa_ipp::DEFAULT_PORT)) {
+        Ok(listener) => {
+            if let Err(e) = runtime.start_capture(listener, inbox.clone(), mpa_ipp::DEFAULT_PORT) {
+                mpa_agent::log::warn(format!("captura IPP no arrancó: {e}"));
+            } else {
+                mpa_agent::log::info(format!(
+                    "captura IPP en http://127.0.0.1:{}{} -> {}",
+                    mpa_ipp::DEFAULT_PORT,
+                    mpa_ipp::PRINT_PATH,
+                    inbox.display()
+                ));
+            }
+        }
+        Err(e) => mpa_agent::log::warn(format!(
+            "puerto {} ocupado, sin captura IPP: {e}",
+            mpa_ipp::DEFAULT_PORT
+        )),
+    }
+
     spawn_ticket_refresh(Arc::clone(&core));
     mpa_agent::log::info(format!(
         "starting mpa-desktop v{}",
