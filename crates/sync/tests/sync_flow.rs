@@ -313,6 +313,8 @@ fn pairing_store_roundtrip_with_owner_only_file() {
         agent_id: "a1".into(),
         workspace_id: "w1".into(),
         agent_key: "secret".into(),
+        device_secret: String::new(),
+        device_public: String::new(),
     };
     store.save(Some(path.clone())).unwrap();
     let loaded = PairingStore::load(Some(path.clone())).unwrap();

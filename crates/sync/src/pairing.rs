@@ -1,4 +1,6 @@
 use crate::client::Pairing;
+use crate::sign::DeviceKey;
+use base64::Engine;
 use mpa_agent::{config_path, ConfigError};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -12,16 +14,45 @@ pub struct PairingStore {
     pub agent_id: String,
     pub workspace_id: String,
     pub agent_key: String,
+    /// Base64 of the 32-byte Ed25519 secret. Absent on pairings made before
+    /// request signing existed; `device_key` returns an error until the device
+    /// re-pairs, which is the safe outcome.
+    #[serde(default)]
+    pub device_secret: String,
+    /// Base64 of the matching public key, sent at pairing time.
+    #[serde(default)]
+    pub device_public: String,
 }
 
 impl PairingStore {
     pub fn from_pairing(server_url: &str, pairing: Pairing) -> Self {
+        let device_public = pairing
+            .device_secret
+            .as_deref()
+            .and_then(|encoded| {
+                base64::engine::general_purpose::STANDARD
+                    .decode(encoded)
+                    .ok()
+            })
+            .and_then(|bytes| DeviceKey::from_secret(&bytes).ok())
+            .map(|key| key.public_b64())
+            .unwrap_or_default();
         Self {
             server_url: server_url.trim_end_matches('/').to_string(),
             agent_id: pairing.agent_id,
             workspace_id: pairing.workspace_id,
             agent_key: pairing.agent_key,
+            device_secret: pairing.device_secret.unwrap_or_default(),
+            device_public,
         }
+    }
+
+    /// The device identity, when this pairing has one.
+    pub fn device_key(&self) -> Result<DeviceKey, PairingError> {
+        let raw = base64::engine::general_purpose::STANDARD
+            .decode(self.device_secret.trim())
+            .map_err(|_| PairingError::NoDeviceKey)?;
+        DeviceKey::from_secret(&raw).map_err(|_| PairingError::NoDeviceKey)
     }
 
     /// Explicit env wins (CI/tests), then the file.
@@ -36,6 +67,8 @@ impl PairingStore {
                     agent_id: String::new(),
                     workspace_id: String::new(),
                     agent_key,
+                    device_secret: String::new(),
+                    device_public: String::new(),
                 });
             }
         }
@@ -92,6 +125,8 @@ fn restrict(_path: &PathBuf) -> Result<(), PairingError> {
 pub enum PairingError {
     #[error("not paired: run `mpa pair <code>` first")]
     NotPaired,
+    #[error("this device has no signing key: re-run `mpa pair <code>` to get one")]
+    NoDeviceKey,
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
     #[error("config: {0}")]

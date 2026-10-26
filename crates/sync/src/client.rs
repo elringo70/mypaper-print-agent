@@ -1,3 +1,4 @@
+use base64::Engine;
 use mpa_agent::{OutboxEntry, TargetSelection};
 use mpa_domain::{MetricsByMode, PrintMode, Tier};
 use serde::{Deserialize, Serialize};
@@ -25,6 +26,9 @@ struct PairBody<'a> {
     code: &'a str,
     #[serde(rename = "pcName")]
     pc_name: &'a str,
+    /// Ed25519 public key the device will sign every later request with.
+    #[serde(rename = "publicKey")]
+    public_key: &'a str,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -42,6 +46,9 @@ pub struct Pairing {
     pub agent_id: String,
     pub agent_key: String,
     pub workspace_id: String,
+    /// Base64 of the device secret generated locally for this pairing. It never
+    /// comes from the server; `pair` fills it so the caller can persist it.
+    pub device_secret: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -266,6 +273,8 @@ impl Quote {
 pub struct SyncClient {
     base_url: String,
     agent_key: Option<String>,
+    /// Present when the pairing store holds a device key.
+    device: Option<crate::sign::DeviceKey>,
     http: reqwest::blocking::Client,
 }
 
@@ -283,9 +292,19 @@ impl SyncClient {
         let http = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(15))
             .build()?;
+        let base_url = base_url.trim_end_matches('/').to_string();
+        // The device key lives in the pairing store. Attaching it here keeps
+        // every existing call site honest without threading a parameter
+        // through the whole agent; a client pointed at another server (tests,
+        // update manifests) simply stays unsigned.
+        let device = crate::pairing::PairingStore::load(None)
+            .ok()
+            .filter(|p| p.server_url == base_url)
+            .and_then(|p| p.device_key().ok());
         Ok(Self {
-            base_url: base_url.trim_end_matches('/').to_string(),
+            base_url,
             agent_key,
+            device,
             http,
         })
     }
@@ -299,7 +318,18 @@ impl SyncClient {
             .timeout(Duration::from_secs(15))
             .build()?;
         let url = format!("{}/api/agent/pair", base_url.trim_end_matches('/'));
-        let res = http.post(&url).json(&PairBody { code, pc_name }).send()?;
+        // A fresh identity per pairing: re-pairing rotates the key, which is
+        // also how a suspected copy is invalidated.
+        let device = crate::sign::DeviceKey::generate();
+        let public_key = device.public_b64();
+        let res = http
+            .post(&url)
+            .json(&PairBody {
+                code,
+                pc_name,
+                public_key: &public_key,
+            })
+            .send()?;
         if !res.status().is_success() {
             let status = res.status().as_u16();
             let body = res.text().unwrap_or_default();
@@ -310,12 +340,42 @@ impl SyncClient {
             agent_id: body.agent_id,
             agent_key: body.agent_key,
             workspace_id: body.workspace_id,
+            device_secret: Some(base64::engine::general_purpose::STANDARD.encode(device.secret())),
         })
     }
 
     fn auth(&self, req: reqwest::blocking::RequestBuilder) -> reqwest::blocking::RequestBuilder {
         match &self.agent_key {
             Some(key) => req.bearer_auth(key),
+            None => req,
+        }
+    }
+
+    /// Build an agent request: bearer key plus, when a device key exists, the
+    /// Ed25519 signature over method, path, timestamp, nonce and body.
+    fn signed(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<Vec<u8>>,
+    ) -> reqwest::blocking::RequestBuilder {
+        let url = format!("{}{}", self.base_url, path);
+        let req = if method.eq_ignore_ascii_case("get") {
+            self.http.get(&url)
+        } else {
+            self.http.post(&url)
+        };
+        let mut req = self.auth(req);
+        if let Some(device) = &self.device {
+            let signed = device.sign_request(method, path, body.as_deref().unwrap_or(&[]));
+            for (name, value) in signed.headers() {
+                req = req.header(name, value);
+            }
+        }
+        match body {
+            Some(bytes) => req
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(bytes),
             None => req,
         }
     }
@@ -353,16 +413,14 @@ impl SyncClient {
     }
 
     pub fn get_tiers(&self) -> Result<Vec<RemoteTier>, SyncError> {
-        let url = format!("{}/api/agent/tiers", self.base_url);
-        let res = Self::check(self.auth(self.http.get(&url)).send()?)?;
+        let res = Self::check(self.signed("GET", "/api/agent/tiers", None).send()?)?;
         let body: TiersResponse = res.json().map_err(|e| SyncError::Parse(e.to_string()))?;
         Ok(body.tiers)
     }
 
     /// Tabulador mapped to domain types plus the metrics in force.
     pub fn get_tiers_sync(&self) -> Result<TierSync, SyncError> {
-        let url = format!("{}/api/agent/tiers", self.base_url);
-        let res = Self::check(self.auth(self.http.get(&url)).send()?)?;
+        let res = Self::check(self.signed("GET", "/api/agent/tiers", None).send()?)?;
         let body: TiersResponse = res.json().map_err(|e| SyncError::Parse(e.to_string()))?;
         Ok(TierSync {
             tiers: body.tiers.iter().map(|t| t.to_domain()).collect(),
@@ -377,8 +435,7 @@ impl SyncClient {
     }
 
     pub fn get_open_tickets(&self) -> Result<Vec<mpa_agent::Ticket>, SyncError> {
-        let url = format!("{}/api/agent/open-tickets", self.base_url);
-        let res = Self::check(self.auth(self.http.get(&url)).send()?)?;
+        let res = Self::check(self.signed("GET", "/api/agent/open-tickets", None).send()?)?;
         let body: TicketsResponse = res.json().map_err(|e| SyncError::Parse(e.to_string()))?;
         Ok(body
             .tickets
@@ -395,8 +452,7 @@ impl SyncClient {
     /// Drafts the server actually stored, newest first. Read-back for the link
     /// check and for outbox reconciliation.
     pub fn get_recent_jobs(&self) -> Result<Vec<RemoteJob>, SyncError> {
-        let url = format!("{}/api/agent/jobs", self.base_url);
-        let res = Self::check(self.auth(self.http.get(&url)).send()?)?;
+        let res = Self::check(self.signed("GET", "/api/agent/jobs", None).send()?)?;
         let body: JobsResponse = res.json().map_err(|e| SyncError::Parse(e.to_string()))?;
         Ok(body.jobs)
     }
@@ -404,7 +460,6 @@ impl SyncClient {
     /// Push one outbox entry. The server is idempotent on the key and prices
     /// authoritatively; the returned id is stored for reconciliation.
     pub fn post_job(&self, entry: &OutboxEntry) -> Result<String, SyncError> {
-        let url = format!("{}/api/agent/jobs", self.base_url);
         let body = JobBody {
             idempotency_key: entry.idempotency_key.clone(),
             target_order_id: match &entry.target {
@@ -427,7 +482,8 @@ impl SyncClient {
                 })
                 .collect(),
         };
-        let res = Self::check(self.auth(self.http.post(&url)).json(&body).send()?)?;
+        let bytes = serde_json::to_vec(&body).map_err(|e| SyncError::Parse(e.to_string()))?;
+        let res = Self::check(self.signed("POST", "/api/agent/jobs", Some(bytes)).send()?)?;
         let value: serde_json::Value = res.json().map_err(|e| SyncError::Parse(e.to_string()))?;
         value
             .get("jobId")
@@ -439,17 +495,20 @@ impl SyncClient {
     /// Prices the analyzed pages in BOTH modes without storing anything: the
     /// operator sees what each printer role would cost before choosing.
     pub fn quote(&self, pages: &[QuotePage]) -> Result<Quote, SyncError> {
-        let url = format!("{}/api/agent/quote", self.base_url);
         let body = serde_json::json!({ "pages": pages });
-        let res = Self::check(self.auth(self.http.post(&url)).json(&body).send()?)?;
+        let bytes = serde_json::to_vec(&body).map_err(|e| SyncError::Parse(e.to_string()))?;
+        let res = Self::check(
+            self.signed("POST", "/api/agent/quote", Some(bytes))
+                .send()?,
+        )?;
         res.json().map_err(|e| SyncError::Parse(e.to_string()))
     }
 
     /// Inject a pushed draft into its ticket as order lines. Idempotent
     /// server-side: replaying returns the same summary without duplicating.
     pub fn materialize_job(&self, job_id: &str) -> Result<MaterializeAck, SyncError> {
-        let url = format!("{}/api/agent/jobs/{job_id}/materialize", self.base_url);
-        let res = Self::check(self.auth(self.http.post(&url)).send()?)?;
+        let path = format!("/api/agent/jobs/{job_id}/materialize");
+        let res = Self::check(self.signed("POST", &path, Some(b"{}".to_vec())).send()?)?;
         res.json().map_err(|e| SyncError::Parse(e.to_string()))
     }
 }
