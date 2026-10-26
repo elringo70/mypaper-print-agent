@@ -231,3 +231,65 @@ fn authorising_queues_the_print_and_releases_the_job() {
         .is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Spooler with the capture queue plus a physical printer.
+struct QueueAndPrinter;
+
+impl SpoolBackend for QueueAndPrinter {
+    fn list_printers(&self) -> Result<Vec<PrinterInfo>, SpoolError> {
+        Ok(vec![
+            PrinterInfo {
+                name: mpa_agent::CAPTURE_PRINTER.into(),
+                status: "READY".into(),
+            },
+            PrinterInfo {
+                name: "KONICA".into(),
+                status: "READY".into(),
+            },
+        ])
+    }
+    fn list_jobs(&self, _printer: &str) -> Result<Vec<mpa_spool::JobInfo>, SpoolError> {
+        Ok(Vec::new())
+    }
+    fn pause_job(&self, _printer: &str, _job_id: u32) -> Result<(), SpoolError> {
+        Ok(())
+    }
+    fn resume_job(&self, _printer: &str, _job_id: u32) -> Result<(), SpoolError> {
+        Ok(())
+    }
+    fn cancel_job(&self, _printer: &str, _job_id: u32) -> Result<(), SpoolError> {
+        Ok(())
+    }
+    fn wait_for_new_job(
+        &self,
+        _printer: &str,
+        _timeout: Duration,
+    ) -> Result<Option<u32>, SpoolError> {
+        Ok(None)
+    }
+}
+
+#[test]
+fn the_capture_queue_is_not_watched_by_the_spooler() {
+    // Watching it captured every job twice: the IPP port's spool file is XPS,
+    // which the analyzer cannot read, so the window filled with "0 páginas".
+    let core = AgentCore::new(
+        Arc::new(QueueAndPrinter) as Arc<dyn SpoolBackend>,
+        Arc::new(MockTickets::demo()),
+        tiers(),
+    );
+    let policy = PrinterPolicy {
+        mode: PolicyMode::Denylist,
+        watched: vec![],
+        ignored: vec![],
+    };
+    let watched = core.watched_printers(&policy);
+    assert!(
+        !watched.iter().any(|p| p == mpa_agent::CAPTURE_PRINTER),
+        "the capture queue must not be watched: {watched:?}"
+    );
+    assert!(
+        watched.iter().any(|p| p == "KONICA"),
+        "physical printers stay: {watched:?}"
+    );
+}

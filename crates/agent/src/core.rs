@@ -630,6 +630,11 @@ impl AgentCore {
             .unwrap_or_default()
             .into_iter()
             .map(|p| p.name)
+            // The capture queue is never watched: its spool file is the XPS the
+            // IPP port produced, and the document already reaches us as PDF
+            // through the endpoint. Watching it too captured every job twice,
+            // once with an unmeasurable format.
+            .filter(|name| name != crate::CAPTURE_PRINTER)
             .filter(|name| policy.watches(name))
             .collect()
     }
