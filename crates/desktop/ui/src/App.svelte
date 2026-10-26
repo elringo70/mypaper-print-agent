@@ -7,7 +7,9 @@
 	let checks = $state<CheckDto[] | null>(null);
 	let busy = $state(false);
 
-	const jobs = $derived(snapshot?.jobs ?? []);
+	// Released and cancelled jobs are done: they must leave the list, or the
+	// operator keeps seeing work that was already printed and charged.
+	const jobs = $derived((snapshot?.jobs ?? []).filter((j) => j.state === 'Paused'));
 	const current = $derived(
 		jobs.find((j) => `${j.printer}#${j.jobId}` === selected) ?? jobs[0] ?? null
 	);

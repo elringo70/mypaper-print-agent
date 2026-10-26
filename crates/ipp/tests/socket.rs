@@ -256,3 +256,61 @@ fn the_job_name_survives_create_job_to_send_document() {
     assert_eq!(job.name, "Microsoft Word - cotizacion.docx");
     assert_eq!(job.document, b"%PDF-1.7 body");
 }
+
+#[test]
+fn a_resent_document_is_stored_once() {
+    // Windows resends when it believes the first attempt failed; the same job id
+    // means the same document, and storing it twice charges and prints twice.
+    let dir = workdir("resend");
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let out = dir.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = mpa_ipp::serve_with(listener, out, port, move |job, _| {
+            let _ = tx.send(job.name.clone());
+        });
+    });
+
+    let send_document = |id: u32, body_doc: &[u8]| {
+        let mut req = vec![0x02, 0x00];
+        req.extend_from_slice(&0x0006u16.to_be_bytes()); // Send-Document
+        req.extend_from_slice(&1u32.to_be_bytes());
+        req.push(0x01);
+        req.extend(attribute(0x47, "attributes-charset", b"utf-8"));
+        req.extend(attribute(0x21, "job-id", &id.to_be_bytes()));
+        req.extend(attribute(0x42, "job-name", b"repetido.pdf"));
+        req.push(0x03);
+        req.extend_from_slice(body_doc);
+
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("timeout");
+        stream
+            .write_all(
+                format!(
+                    "POST /ipp/print HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/ipp\r\nContent-Length: {}\r\n\r\n",
+                    req.len()
+                )
+                .as_bytes(),
+            )
+            .expect("head");
+        stream.write_all(&req).expect("body");
+        let _ = read_one_response(&mut stream);
+    };
+
+    send_document(9, b"%PDF-1.7 first");
+    send_document(9, b"%PDF-1.7 first"); // the retry
+    send_document(10, b"%PDF-1.7 second");
+
+    let first = rx.recv_timeout(Duration::from_secs(5)).expect("first job");
+    assert_eq!(first, "repetido.pdf");
+    let second = rx.recv_timeout(Duration::from_secs(5)).expect("second job");
+    assert_eq!(second, "repetido.pdf");
+    assert!(
+        rx.recv_timeout(Duration::from_millis(300)).is_err(),
+        "the resent document must not be stored a second time"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

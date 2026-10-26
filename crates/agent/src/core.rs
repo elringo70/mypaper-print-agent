@@ -305,6 +305,9 @@ impl WatchedJob {
     }
 }
 
+/// A reprint that keeps failing must not block the queue forever.
+pub const MAX_REPRINT_ATTEMPTS: u8 = 3;
+
 /// One analyzed page as the server expects it (`include=false` = unchecked,
 /// priced zero server-side).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -349,6 +352,9 @@ pub struct OutboxEntry {
     /// Partial completion cancels the held job; the subset must be reprinted
     /// from the cached spool bytes.
     pub reprint_pending: bool,
+    /// Failed reprint attempts so far; the sweep stops after a few.
+    #[serde(default)]
+    pub reprint_attempts: u8,
     pub synced: bool,
     pub remote_id: Option<String>,
     /// Lines injected into the ticket via `materialize`. Defaults false so
@@ -599,8 +605,33 @@ impl AgentCore {
     /// Clone the oldest entry awaiting a subset reprint (brief lock only).
     /// The caller runs Ghostscript UNLOCKED, then reports back with
     /// `mark_reprinted`.
-    pub fn claim_reprint_entry(&self) -> Option<OutboxEntry> {
-        self.outbox.iter().find(|e| e.reprint_pending).cloned()
+    /// Take the next entry to reprint, clearing its flag as it is claimed.
+    ///
+    /// Clearing on claim is what stops a duplicate: the sweep used to hand out
+    /// the same entry on every tick while the first print was still in flight,
+    /// so one authorisation produced several copies on paper. A failed attempt
+    /// puts the entry back through `mark_reprint_failed`.
+    pub fn claim_reprint_entry(&mut self) -> Option<OutboxEntry> {
+        let index = self.outbox.iter().position(|e| e.reprint_pending)?;
+        self.outbox[index].reprint_pending = false;
+        self.bump();
+        Some(self.outbox[index].clone())
+    }
+
+    /// The attempt failed: put it back, up to a small cap. Retrying forever
+    /// would jam every later job behind a document that cannot print.
+    pub fn mark_reprint_failed(&mut self, idempotency_key: &str) {
+        if let Some(entry) = self
+            .outbox
+            .iter_mut()
+            .find(|e| e.idempotency_key == idempotency_key)
+        {
+            entry.reprint_attempts = entry.reprint_attempts.saturating_add(1);
+            // Assigned, not only raised: an entry left pending from an earlier
+            // attempt would otherwise stay pending past the cap and loop again.
+            entry.reprint_pending = entry.reprint_attempts < MAX_REPRINT_ATTEMPTS;
+            self.bump();
+        }
     }
 
     /// Clear the reprint flag after a successful out-of-lock reprint.
@@ -1123,6 +1154,7 @@ impl AgentCore {
             options,
             applied_settings: applied,
             reprint_pending: needs_reprint,
+            reprint_attempts: 0,
             synced: false,
             materialized: false,
             remote_id: None,
@@ -1199,6 +1231,7 @@ impl AgentCore {
             options: None,
             applied_settings: None,
             reprint_pending: true,
+            reprint_attempts: 0,
             synced: false,
             materialized: false,
             remote_id: None,

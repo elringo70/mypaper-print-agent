@@ -293,3 +293,49 @@ fn the_capture_queue_is_not_watched_by_the_spooler() {
         "physical printers stay: {watched:?}"
     );
 }
+
+#[test]
+fn one_authorisation_prints_once() {
+    // The sweep handed the same entry to every tick while the first print was
+    // still going, so one Imprimir produced several copies on paper.
+    let mut core = AgentCore::new(
+        Arc::new(NoPrinters) as Arc<dyn SpoolBackend>,
+        Arc::new(MockTickets::demo()),
+        tiers(),
+    );
+    core.set_outbox(vec![mpa_agent::OutboxEntry {
+        idempotency_key: "k1".into(),
+        printer: "MyPaper".into(),
+        job_id: 1,
+        target: mpa_agent::TargetSelection::Unassigned,
+        pages: Vec::new(),
+        format: Some(mpa_analyzer::SpoolFormat::Pdf),
+        spool_path: None,
+        mode: mpa_domain::PrintMode::Bw,
+        deliver_printer: None,
+        options: None,
+        applied_settings: None,
+        reprint_pending: true,
+        reprint_attempts: 0,
+        synced: false,
+        remote_id: None,
+        materialized: false,
+    }]);
+
+    assert!(core.claim_reprint_entry().is_some(), "first tick prints");
+    assert!(
+        core.claim_reprint_entry().is_none(),
+        "the same entry must not be printed again while it is in flight"
+    );
+
+    // A failure puts it back, but only a few times.
+    core.mark_reprint_failed("k1");
+    assert!(core.claim_reprint_entry().is_some(), "a failure retries");
+    for _ in 0..10 {
+        core.mark_reprint_failed("k1");
+    }
+    assert!(
+        core.claim_reprint_entry().is_none(),
+        "a document that cannot print must not block the queue forever"
+    );
+}

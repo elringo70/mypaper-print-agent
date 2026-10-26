@@ -55,6 +55,7 @@ pub fn draft_for(captured: &CapturedJob<'_>, analysis: &JobAnalysis) -> OutboxEn
         options: None,
         applied_settings: None,
         reprint_pending: false,
+        reprint_attempts: 0,
         synced: false,
         remote_id: None,
         materialized: false,

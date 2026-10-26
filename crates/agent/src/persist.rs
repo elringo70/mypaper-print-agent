@@ -121,6 +121,7 @@ mod tests {
             options: None,
             applied_settings: None,
             reprint_pending: false,
+            reprint_attempts: 0,
             synced: true,
             remote_id: Some("job-1".into()),
             materialized: true,

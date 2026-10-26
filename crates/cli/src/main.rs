@@ -990,6 +990,7 @@ fn push_test_command(
         options: None,
         applied_settings: None,
         reprint_pending: false,
+        reprint_attempts: 0,
         synced: false,
         remote_id: None,
         materialized: false,

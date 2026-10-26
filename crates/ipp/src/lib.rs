@@ -184,6 +184,16 @@ impl Request {
         })
     }
 
+    /// The job id the client is talking about, when it sends one.
+    fn job_id(&self) -> Option<u32> {
+        self.attributes
+            .iter()
+            .find(|a| a.name == "job-id")
+            .and_then(|a| a.values.first())
+            .filter(|v| v.len() == 4)
+            .map(|v| u32::from_be_bytes([v[0], v[1], v[2], v[3]]))
+    }
+
     fn text(&self, name: &str) -> Option<String> {
         self.attributes
             .iter()
@@ -436,6 +446,9 @@ pub fn handle_with(
     let (major, minor) = (request.major, request.minor);
     let request_id = request.request_id;
     let operation = request.operation;
+    // Windows creates the job first and then refers to it by its own id; using
+    // ours made the two halves of one job look like different jobs.
+    let job_id = request.job_id().unwrap_or(job_id);
 
     let language = request
         .text("attributes-natural-language")
@@ -676,6 +689,9 @@ where
     let mut next_job: u32 = 1;
     let mut seen: u32 = 0;
     let mut job_names: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
+    // Windows resends a document when it thinks the first attempt failed. Same
+    // job id means the same document: storing it twice charges and prints twice.
+    let mut stored_jobs: std::collections::HashSet<u32> = std::collections::HashSet::new();
     for stream in listener.incoming() {
         let mut stream = stream?;
         // A client may reuse the connection for several operations; keep
@@ -747,6 +763,20 @@ where
             // this response and a 300 dpi render is not its problem.
             let mut stored: Option<(ReceivedJob, PathBuf)> = None;
             if let Some(job) = &handled.job {
+                if stored_jobs.contains(&job.id) {
+                    println!("ipp: job {} reenviado por el cliente, ignorado", job.id);
+                    let mut response = Vec::new();
+                    response.extend_from_slice(b"HTTP/1.1 200 OK\r\n");
+                    response.extend_from_slice(b"Content-Type: application/ipp\r\n");
+                    response.extend_from_slice(
+                        format!("Content-Length: {}\r\n", handled.response.len()).as_bytes(),
+                    );
+                    response.extend_from_slice(b"Connection: keep-alive\r\n\r\n");
+                    response.extend_from_slice(&handled.response);
+                    stream.write_all(&response)?;
+                    stream.flush()?;
+                    continue;
+                }
                 match save_job(&out_dir, job) {
                     Ok(path) => {
                         println!(
@@ -754,6 +784,7 @@ where
                             path.display(),
                             job.document.len()
                         );
+                        stored_jobs.insert(job.id);
                         stored = Some((job.clone(), path));
                         next_job += 1;
                     }

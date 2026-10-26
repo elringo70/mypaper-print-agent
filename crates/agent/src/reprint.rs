@@ -71,7 +71,7 @@ pub fn sweep_one_reprint(
 ) -> SweepOutcome {
     let Some(entry) = core
         .lock()
-        .map(|core| core.claim_reprint_entry())
+        .map(|mut core| core.claim_reprint_entry())
         .unwrap_or(None)
     else {
         return SweepOutcome::Idle;
@@ -84,10 +84,15 @@ pub fn sweep_one_reprint(
             }
             SweepOutcome::Reprinted { key }
         }
-        Err(e) => SweepOutcome::Failed {
-            key,
-            error: e.to_string(),
-        },
+        Err(e) => {
+            if let Ok(mut core) = core.lock() {
+                core.mark_reprint_failed(&key);
+            }
+            SweepOutcome::Failed {
+                key,
+                error: e.to_string(),
+            }
+        }
     }
 }
 
@@ -143,6 +148,7 @@ mod tests {
             options: None,
             applied_settings: None,
             reprint_pending: true,
+            reprint_attempts: 0,
             synced: false,
             remote_id: None,
             materialized: false,
