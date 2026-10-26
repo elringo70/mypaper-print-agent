@@ -421,6 +421,33 @@ Pendiente de Fase 1:
 - Retirar `gs.rs`/`convert.rs` y el flag de Ghostscript una vez que la DLL esté en los
   releases; hoy siguen como red de seguridad para PostScript/XPS/PCL.
 
+### Cierre de Fase 1 (misma fecha)
+
+- `gs.rs`, `convert.rs` y `subset.rs::print_pdf_to_winprinter` **eliminados**: el binario
+  ya no contiene ninguna ruta que invoque Ghostscript. PostScript, XPS y PCL se rechazan
+  por nombre.
+- `print.rs` nuevo: impresión por raster (`StartDocW`/`StretchDIBits`) de las páginas
+  medidas. Reemplaza `gs -sDEVICE=mswinpr2`, así lo que se imprime es lo que se midió.
+- `reprint.rs` reescrito: renderiza las páginas seleccionadas a 300 dpi y las imprime; ya
+  no extrae un PDF con Ghostscript. Las opciones de papel/dúplex aún no se aplican en esa
+  ruta (el entry las conserva para auditoría).
+- `doctor` reporta pdfium en lugar de ghostscript/gpcl6.
+- `packaging/fetch-pdfium.ps1` + instalador + workflow: `pdfium.dll` viaja junto a los
+  binarios. Los prerrequisitos quedan en **Windows + WebView2**.
+
+### Fase 2 — precio por área (cerrada salvo el preset)
+
+- `PrintMetric::Area` en el dominio con `metric_coverage_with_area`; sin medición cobra 0
+  en vez de adivinar, y se acota a 0-100.
+- `dearest_tier`/`priced_coverage` reciben el área medida, así la regla "gana el más caro"
+  sigue valiendo cuando el conjunto de color factura por área.
+- El agente conserva `PageArea` (área + clase) y la envía como `coverageNonwhite` y
+  `pageClass`, solo cuando midió píxeles. Sin eso, un workspace en AREA habría cobrado 0.
+- POS: `AREA` en el enum, en la métrica de cobro, en la migración `print_metric` y en el
+  selector del editor de tarifas. `printJobPage` acepta los campos nuevos como opcionales.
+- **Falta**: el preset "CyberPlanet 6.5" (6 tramos + ByN $1.50 como seed configurable).
+  Es datos, no código: se puede cargar desde `print-tiers` sin tocar el esquema.
+
 Riesgo de este incremento: **ninguno de los ítems altos**. Cambia la medición de imágenes
 (contrato interno, no publicado) y añade un campo opcional; no toca datos persistidos,
 seguridad, contratos externos ni concurrencia. `Risk: none`.
