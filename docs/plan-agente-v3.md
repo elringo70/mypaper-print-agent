@@ -189,6 +189,33 @@ copias desde el panel, USB y lo que se manda directo a otra impresora.
 Medir sin cobrar durante una semana en la papelería, comparar contra lo que el operador
 espera y contra lo que reporta CyberPlanet en la misma máquina para las mismas páginas.
 
+**Instrumentado.** El agente escribe un diario en `ipp-inbox\pilot.jsonl`: una línea por
+trabajo con sus páginas (clase, área, CMYK) y lo que habría costado en cada juego de reglas.
+El precio se pide al servidor; si no está disponible, el trabajo queda registrado como «sin
+precio» en vez de inventarlo. `mpa pilot report` lo resume:
+
+```
+2026-10-26T10:00:00Z  cotizacion.docx  2 pág.  B/N $9.00   Color $9.00
+2026-10-26T11:30:00Z  foto.png         1 pág.  B/N $11.00  Color $48.00
+2026-10-26T12:00:00Z  sin-servidor.pdf 1 pág.  B/N sin precio  Color sin precio
+
+trabajos 3 · páginas 4 · blanco 0 · mono 2 · gris 1 · color 1
+total B/N $20.00 · total color $57.00 · 1 sin precio
+```
+
+**Cómo correrlo** (esto ya es del operador, no del código):
+
+1. Una semana imprimiendo normal por la cola `MyPaper`, sin tocar el cobro.
+2. Al cerrar cada día, `mpa pilot report --days 1` y comparar contra lo que el sistema
+   anterior cobró por esas mismas hojas.
+3. Al final, `mpa pilot report` y revisar tres cosas: páginas que el agente vio y el
+   sistema viejo no cobró (o al revés), trabajos «sin precio», y diferencias de clase
+   (gris tratado como color, blancos cobrados).
+
+Lo que puede salir mal y qué significa: un trabajo «sin precio» es una caída del servidor,
+no un error de medición; una página de menos es alguien imprimiendo fuera de la cola; una
+diferencia de clase es una regla del tarifario, no del analizador.
+
 ## Riesgos
 
 | Riesgo | Mitigación |
