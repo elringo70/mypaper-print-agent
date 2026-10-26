@@ -120,6 +120,11 @@ enum Commands {
         #[command(subcommand)]
         action: Option<TierAction>,
     },
+    /// Local analysis cache: stats | gc | clear.
+    Cache {
+        #[command(subcommand)]
+        action: CacheAction,
+    },
     /// Offline entitlement: refresh from the server, or inspect the cached one.
     Entitlement {
         /// Verify and print the cached token without contacting the server.
@@ -153,6 +158,16 @@ enum UpdateAction {
         #[arg(long)]
         yes: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum CacheAction {
+    /// Entries and bytes on disk.
+    Stats,
+    /// Evict least-recently-used entries down to the cap.
+    Gc,
+    /// Delete every entry.
+    Clear,
 }
 
 #[derive(Subcommand)]
@@ -589,6 +604,9 @@ fn run() -> Result<(), AppError> {
         }
         Commands::Tiers { action } => {
             tiers_command(action, config_override)?;
+        }
+        Commands::Cache { action } => {
+            cache_command(action);
         }
         Commands::Entitlement { status } => {
             entitlement_command(status)?;
@@ -1391,6 +1409,37 @@ fn analyze_command(
         );
     }
     Ok(())
+}
+
+
+/// Local analysis cache. One document measured once stays measured until the
+/// engine changes or the cap evicts it.
+fn cache_command(action: CacheAction) {
+    let cache = mpa_agent::cache::AnalysisCache::open_default();
+    println!("cache: {}", cache.dir().display());
+    match action {
+        CacheAction::Stats => {
+            let stats = cache.stats();
+            println!(
+                "{} entradas · {} ({:.1} MB)",
+                stats.entries,
+                stats.bytes,
+                stats.bytes as f64 / 1_048_576.0
+            );
+        }
+        CacheAction::Gc => {
+            let removed = cache.gc();
+            let stats = cache.stats();
+            println!(
+                "evictadas {removed} · quedan {} ({:.1} MB)",
+                stats.entries,
+                stats.bytes as f64 / 1_048_576.0
+            );
+        }
+        CacheAction::Clear => {
+            println!("borradas {} entradas", cache.clear());
+        }
+    }
 }
 
 /// Evaluate the offline entitlement once, before any job can be paused.

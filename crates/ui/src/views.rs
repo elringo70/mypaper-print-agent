@@ -518,7 +518,7 @@ fn quote_line(job: &JobView, st: &UiState) -> impl IntoElement {
         bw.page_count + color.page_count
     )));
     if !unpriced.is_empty() {
-        let mut pages = unpriced.clone();
+        let mut pages = unpriced;
         pages.sort_unstable();
         pages.dedup();
         let list: Vec<String> = pages.iter().map(|p| p.to_string()).collect();

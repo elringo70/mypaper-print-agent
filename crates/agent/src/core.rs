@@ -239,13 +239,27 @@ pub fn analyze_spool(
             });
         }
     };
-    let analysis = match analyze_bytes(&spool.data) {
-        Ok(analysis) => analysis,
-        Err(e) => {
-            return Err(AnalysisFailure {
-                message: e.to_string(),
-                error: e.into(),
-            })
+    // Same document measured before? The key covers content, engine and dpi,
+    // so a hit is exactly what this engine would compute — no stale numbers,
+    // and reprinting a file costs nothing.
+    let dpi = mpa_analyzer::Thresholds::default().dpi;
+    let key = crate::cache::AnalysisCache::key_for(&spool.data, dpi);
+    let cache = crate::cache::AnalysisCache::open_default();
+    let analysis = match cache.get(&key) {
+        Some(hit) => hit,
+        None => {
+            let fresh = match analyze_bytes(&spool.data) {
+                Ok(analysis) => analysis,
+                Err(e) => {
+                    return Err(AnalysisFailure {
+                        message: e.to_string(),
+                        error: e.into(),
+                    })
+                }
+            };
+            cache.put(&key, &fresh);
+            let _ = cache.gc();
+            fresh
         }
     };
     // Keep our own copy: the spooler deletes its file once the held job is

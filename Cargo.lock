@@ -4497,13 +4497,16 @@ dependencies = [
 name = "mpa-agent"
 version = "0.2.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "dirs 6.0.0",
+ "hex",
  "mpa-analyzer",
  "mpa-domain",
  "mpa-spool",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror 2.0.21",
  "toml 0.8.23",
 ]
@@ -4523,7 +4526,7 @@ dependencies = [
 
 [[package]]
 name = "mpa-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "clap",
  "mpa-agent",

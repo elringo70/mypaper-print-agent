@@ -1,5 +1,6 @@
 pub mod audit;
 pub mod config;
+pub mod cache;
 pub mod core;
 pub mod gate;
 pub mod log;
