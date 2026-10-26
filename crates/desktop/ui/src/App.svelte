@@ -271,9 +271,26 @@
 					</ul>
 				{/if}
 
+				{#if current.analysisError}
+					<!-- Unmeasurable is not a glitch the operator can ignore: say what
+					     happened and what to do about it, in this window. -->
+					<div class="blocked">
+						<strong>No se pudo medir este trabajo</strong>
+						<span>{current.analysisError}</span>
+						<span class="small">
+							Sólo se mide lo que llega por la cola <b>MyPaper</b>. La impresora física
+							recibe el flujo del driver (PCL/PostScript) y no se puede leer.
+						</span>
+					</div>
+				{/if}
+
 				<div class="total">
 					<span class="label">Total</span>
-					<strong>{money(modeTotal(current))}</strong>
+					{#if modeTotal(current) === null}
+						<strong class="pending">sin precio</strong>
+					{:else}
+						<strong>{money(modeTotal(current))}</strong>
+					{/if}
 					{#if quoteError}
 						<span class="small warn">sin precio: {quoteError}</span>
 					{/if}
@@ -411,6 +428,21 @@
 	.total strong {
 		font-size: 30px;
 		color: #6ee7a8;
+	}
+	.total strong.pending {
+		font-size: 16px;
+		color: #8b98a8;
+	}
+	.blocked {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		padding: 10px 12px;
+		border-radius: 10px;
+		background: #2a1416;
+		border: 1px solid #5b2327;
+		color: #ffb4b4;
+		font-size: 13px;
 	}
 	.columns {
 		display: grid;
