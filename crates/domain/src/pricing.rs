@@ -1,4 +1,4 @@
-use crate::coverage::{classify_coverage, metric_coverage, Coverage, MetricsByMode, PrintMode};
+use crate::coverage::{classify_coverage, Coverage, MetricsByMode, PrintMode};
 use serde::{Deserialize, Serialize};
 
 /// Billing rules beyond the tabulador itself (Fase 6, extras del modelo
@@ -126,16 +126,21 @@ pub fn is_grey_ink(page: Coverage) -> bool {
 /// nothing to compare and COLOR keeps its precedence.
 pub fn dearest_tier<'a>(
     page: &Coverage,
+    area_pct: Option<f32>,
     tiers: &'a [crate::coverage::Tier],
     metrics: MetricsByMode,
     pricing: &PrintPricing,
     price_of: impl Fn(&str) -> Option<f32>,
 ) -> Option<&'a crate::coverage::Tier> {
     let inked = pricing.apply_intensity(*page);
-    let bw = classify_coverage(metric_coverage(metrics.bw, &inked), tiers, PrintMode::Bw);
+    let bw = classify_coverage(
+        crate::coverage::metric_coverage_with_area(metrics.bw, &inked, area_pct),
+        tiers,
+        PrintMode::Bw,
+    );
     let color = if pricing.has_color_ink(inked) {
         classify_coverage(
-            metric_coverage(metrics.color, &inked),
+            crate::coverage::metric_coverage_with_area(metrics.color, &inked, area_pct),
             tiers,
             PrintMode::Color,
         )
@@ -162,10 +167,15 @@ pub fn dearest_tier<'a>(
 pub fn priced_coverage(
     mode: PrintMode,
     page: Coverage,
+    area_pct: Option<f32>,
     metrics: MetricsByMode,
     pricing: &PrintPricing,
 ) -> f32 {
-    metric_coverage(metrics.for_mode(mode), &pricing.apply_intensity(page))
+    crate::coverage::metric_coverage_with_area(
+        metrics.for_mode(mode),
+        &pricing.apply_intensity(page),
+        area_pct,
+    )
 }
 
 #[cfg(test)]
@@ -308,30 +318,35 @@ mod tests {
         let rules = PrintPricing::default();
         // A page with color ink: both sets match, so the price decides.
         let colorful = page(30.0, 5.0, 0.0, 10.0);
-        let cheap_color = dearest_tier(&colorful, &tiers, metrics, &rules, |id| {
+        let cheap_color = dearest_tier(&colorful, None, &tiers, metrics, &rules, |id| {
             Some(if id == "color" { 2.0 } else { 6.0 })
         })
         .unwrap();
         assert_eq!(cheap_color.id, "bw");
 
-        let dear_color = dearest_tier(&colorful, &tiers, metrics, &rules, |id| {
+        let dear_color = dearest_tier(&colorful, None, &tiers, metrics, &rules, |id| {
             Some(if id == "color" { 6.0 } else { 2.0 })
         })
         .unwrap();
         assert_eq!(dear_color.id, "color");
 
         // Tie → COLOR (same rule as the server).
-        let tie = dearest_tier(&colorful, &tiers, metrics, &rules, |_| Some(4.0)).unwrap();
+        let tie = dearest_tier(&colorful, None, &tiers, metrics, &rules, |_| Some(4.0)).unwrap();
         assert_eq!(tie.id, "color");
 
         // Unknown prices: nothing to compare, color keeps precedence.
-        let unknown = dearest_tier(&colorful, &tiers, metrics, &rules, |_| None).unwrap();
+        let unknown = dearest_tier(&colorful, None, &tiers, metrics, &rules, |_| None).unwrap();
         assert_eq!(unknown.id, "color");
 
         // A black-only page never reaches the color set.
-        let mono = dearest_tier(&page(0.0, 0.0, 0.0, 40.0), &tiers, metrics, &rules, |_| {
-            Some(1.0)
-        })
+        let mono = dearest_tier(
+            &page(0.0, 0.0, 0.0, 40.0),
+            None,
+            &tiers,
+            metrics,
+            &rules,
+            |_| Some(1.0),
+        )
         .unwrap();
         assert_eq!(mono.id, "bw");
     }
@@ -350,6 +365,7 @@ mod tests {
         };
         let labelled = dearest_tier(
             &page(20.0, 20.0, 20.0, 0.0),
+            None,
             &tiers,
             MetricsByMode::default(),
             &rules,
@@ -368,6 +384,7 @@ mod tests {
         };
         let blank = dearest_tier(
             &page(20.0, 20.0, 20.0, 0.0),
+            None,
             &tiers,
             MetricsByMode::default(),
             &strict,
@@ -379,6 +396,7 @@ mod tests {
         let above_zero = vec![tier("bw", PrintMode::Bw, 0.01, 100.0)];
         assert!(dearest_tier(
             &page(20.0, 20.0, 20.0, 0.0),
+            None,
             &above_zero,
             MetricsByMode::default(),
             &strict,
@@ -396,11 +414,23 @@ mod tests {
         let metrics = MetricsByMode::default();
         // SUM_CMYK (color default): 8 + 8 + 8 trimmed to 0, K survives.
         assert_eq!(
-            priced_coverage(PrintMode::Color, page(8.0, 8.0, 8.0, 40.0), metrics, &rules),
+            priced_coverage(
+                PrintMode::Color,
+                page(8.0, 8.0, 8.0, 40.0),
+                None,
+                metrics,
+                &rules
+            ),
             40.0
         );
         assert_eq!(
-            priced_coverage(PrintMode::Bw, page(8.0, 8.0, 8.0, 40.0), metrics, &rules),
+            priced_coverage(
+                PrintMode::Bw,
+                page(8.0, 8.0, 8.0, 40.0),
+                None,
+                metrics,
+                &rules
+            ),
             40.0
         );
     }

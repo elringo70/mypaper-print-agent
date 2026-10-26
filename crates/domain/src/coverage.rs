@@ -43,6 +43,10 @@ pub enum PrintMetric {
     SumCmyk,
     /// Worst color channel.
     MaxChannel,
+    /// Share of the sheet carrying any ink (area percent). This is the metric
+    /// a CyberPlanet-style ladder bills on: it answers "how much of the page is
+    /// printed", not "how much ink per channel".
+    Area,
 }
 
 /// Metric in use per mode, as configured in MyPaper (`print_settings`).
@@ -81,10 +85,22 @@ impl MetricsByMode {
 /// `PrintTierService::metricCoverage` (SUM_CMYK caps at 100%: a full CMYK photo
 /// would otherwise read ~250-300% and no tabulador range covers it).
 pub fn metric_coverage(metric: PrintMetric, coverage: &Coverage) -> f32 {
+    metric_coverage_with_area(metric, coverage, None)
+}
+
+/// [`metric_coverage`] plus the measured area, which AREA needs and the channel
+/// metrics ignore. Without an area, AREA bills as 0 rather than guessing: a
+/// missing measurement must never silently become a cheaper tier.
+pub fn metric_coverage_with_area(
+    metric: PrintMetric,
+    coverage: &Coverage,
+    area_pct: Option<f32>,
+) -> f32 {
     match metric {
         PrintMetric::KOnly => coverage.k,
         PrintMetric::MaxChannel => coverage.color_coverage(),
         PrintMetric::SumCmyk => (coverage.c + coverage.m + coverage.y + coverage.k).min(100.0),
+        PrintMetric::Area => area_pct.unwrap_or(0.0).clamp(0.0, 100.0),
     }
 }
 
@@ -223,5 +239,46 @@ mod tests {
             Some("color-100")
         );
         assert_eq!(classify_coverage(40.0, &tiers[..1], PrintMode::Color), None);
+    }
+
+    /// The CyberPlanet-style ladder bills "how much of the sheet is printed",
+    /// which no CMYK channel can answer on its own.
+    #[test]
+    fn area_metric_bills_the_measured_area() {
+        let page = Coverage::new(0.0, 0.0, 0.0, 10.0);
+        assert_eq!(
+            metric_coverage_with_area(PrintMetric::Area, &page, Some(42.5)),
+            42.5
+        );
+        // The channel metrics ignore the area entirely.
+        assert_eq!(
+            metric_coverage_with_area(PrintMetric::KOnly, &page, Some(42.5)),
+            10.0
+        );
+    }
+
+    /// A missing measurement must never be read as "cheap": AREA falls to 0,
+    /// which is the lowest tier, and the caller can tell by `None`.
+    #[test]
+    fn area_without_a_measurement_is_zero() {
+        let page = Coverage::new(0.0, 0.0, 0.0, 80.0);
+        assert_eq!(
+            metric_coverage_with_area(PrintMetric::Area, &page, None),
+            0.0
+        );
+        assert_eq!(metric_coverage(PrintMetric::Area, &page), 0.0);
+    }
+
+    #[test]
+    fn area_is_clamped_to_a_percentage() {
+        let page = Coverage::new(0.0, 0.0, 0.0, 0.0);
+        assert_eq!(
+            metric_coverage_with_area(PrintMetric::Area, &page, Some(130.0)),
+            100.0
+        );
+        assert_eq!(
+            metric_coverage_with_area(PrintMetric::Area, &page, Some(-5.0)),
+            0.0
+        );
     }
 }

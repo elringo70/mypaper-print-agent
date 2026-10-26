@@ -6,8 +6,8 @@ pub mod release;
 pub mod state;
 
 pub use coverage::{
-    classify_coverage, has_color_ink, metric_coverage, Coverage, MetricsByMode, PrintMetric,
-    PrintMode, Tier,
+    classify_coverage, has_color_ink, metric_coverage, metric_coverage_with_area, Coverage,
+    MetricsByMode, PrintMetric, PrintMode, Tier,
 };
 pub use options::{PrintOptions, PrintPreset};
 pub use policy::{PolicyMode, PrinterPolicy, PrinterRoles};

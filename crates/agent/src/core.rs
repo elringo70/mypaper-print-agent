@@ -107,10 +107,12 @@ pub struct AnalyzedPage {
     pub page_no: u32,
     pub coverage: Coverage,
     pub thumbnail_png: Vec<u8>,
+    /// Full pixel metrics, including the area percent an AREA ladder bills on.
+    pub metrics: Option<mpa_analyzer::PageMetrics>,
 }
 
-/// Result of the heavy half of `analyze_job`: spool capture, Ghostscript
-/// rendering and the cached spool bytes for a possible subset reprint.
+/// Result of the heavy half of `analyze_job`: spool capture, rendering and
+/// the cached spool bytes for a possible subset reprint.
 /// Built OUTSIDE the core lock (seconds of work) and applied with
 /// `AgentCore::record_analysis`.
 #[derive(Debug, Clone)]
@@ -246,6 +248,7 @@ pub fn analyze_spool(
                 page_no: p.page_no,
                 coverage: p.coverage,
                 thumbnail_png: p.thumbnail_png,
+                metrics: p.metrics,
             })
             .collect(),
         spool_path,
@@ -841,11 +844,16 @@ impl AgentCore {
                 // One tested function decides the label so the agent and the
                 // server agree: Fase 6 rules first, then the dearest rule set.
                 // MyPaper still prices the draft authoritatively.
-                let tier_id =
-                    mpa_domain::dearest_tier(&p.coverage, &tiers, metrics, &pricing, |tier_id| {
-                        prices.get(tier_id).copied()
-                    })
-                    .map(|t| t.id.clone());
+                let area_pct = p.metrics.map(|m| m.area_pct() as f32);
+                let tier_id = mpa_domain::dearest_tier(
+                    &p.coverage,
+                    area_pct,
+                    &tiers,
+                    metrics,
+                    &pricing,
+                    |tier_id| prices.get(tier_id).copied(),
+                )
+                .map(|t| t.id.clone());
                 WatchedPage {
                     page_no: p.page_no,
                     coverage: p.coverage,
