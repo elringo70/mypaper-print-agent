@@ -537,6 +537,38 @@ y `crates/ui/tests/ui_flow.rs` construían `WatchedPage` sin el campo nuevo) y d
 el clippy de Windows 1.99 marca y el de Linux 1.92 no. Es la razón para correr siempre el
 espejo antes de dar una fase por cerrada.
 
+### Fase 4 — UI Tauri + Svelte (primer corte)
+
+Hecho:
+
+- Crate `mpa-desktop` (Tauri v2). Arranca igual que la UI de gpui: config, estado,
+  roles, presets, gate de entitlement y watcher. Expone **cinco comandos** al webview:
+  `snapshot`, `toggle_page`, `complete_job`, `cancel_job`, `doctor`.
+- `snapshot` devuelve DTOs planos (miniaturas como data URL). La ventana sondea el
+  `version` del core cada segundo: un sello que cambia es más difícil de desincronizar
+  que un flujo de eventos.
+- Manifiesto de elevación reutilizado: leer los trabajos retenidos exige Administrador,
+  y por eso la ventana carga **solo assets locales** con CSP estricta.
+- `crates/desktop/ui`: Svelte 5 + Vite (lista de trabajos, rejilla de páginas con
+  clase/área, completar/cancelar, panel de diagnóstico).
+
+Verificado en el espejo: `cargo build -p mpa-desktop` → `mpa-desktop.exe` de 24 MB con
+el manifiesto embebido (`requireAdministrator` presente en el binario) y `clippy
+-D warnings` limpio.
+
+Nota operativa: en Linux el crate **no compila** (faltan cabeceras GTK/GIO), así que los
+comandos de Linux excluyen `mpa-ui` **y** `mpa-desktop`:
+
+```bash
+cargo test  --workspace --exclude mpa-ui --exclude mpa-desktop
+cargo clippy --workspace --exclude mpa-ui --exclude mpa-desktop --all-targets -- -D warnings
+```
+
+Falta de Fase 4: compilar el frontend (`npm install && npm run build` en
+`crates/desktop/ui`) y **primera ejecución supervisada** en la máquina Windows —el
+binario arranca y retiene trabajos, así que no debe lanzarse mientras alguien imprima—;
+bandeja del sistema, autoarranque, selección de destino/ticket y presets en la UI.
+
 ## Primer entregable concreto
 
 Fase 1 con el test dorado corriendo sobre los 35 páginas del REA y el analizador sin
