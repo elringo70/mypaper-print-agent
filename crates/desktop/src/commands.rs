@@ -4,7 +4,7 @@
 //! spooler and the printer are slow, and the watcher threads need that lock.
 //! Long work (reprint, sync) already lives on its own thread.
 
-use crate::dto::{AppSnapshot, CheckDto, JobDto, PageDto};
+use crate::dto::{AppSnapshot, CheckDto, JobDto, PageDto, TicketDto};
 use crate::AppState;
 use base64::Engine;
 use mpa_agent::AgentCore;
@@ -41,6 +41,17 @@ pub fn snapshot(state: State<'_, AppState>) -> Result<AppSnapshot, String> {
             analysis_error: job.analysis_error.clone(),
             warnings: job.warnings.clone(),
             format: job.format.map(|f| format!("{f:?}")),
+            target: match &job.target {
+                mpa_agent::TargetSelection::Unassigned => "unassigned".into(),
+                mpa_agent::TargetSelection::NewDraft => "newDraft".into(),
+                mpa_agent::TargetSelection::Ticket(_) => "ticket".into(),
+            },
+            target_ticket_id: match &job.target {
+                mpa_agent::TargetSelection::Ticket(id) => Some(id.clone()),
+                _ => None,
+            },
+            preset: job.preset.clone(),
+            print_mode: format!("{:?}", job.print_mode),
             price: None,
             pages: job
                 .pages
@@ -60,11 +71,25 @@ pub fn snapshot(state: State<'_, AppState>) -> Result<AppSnapshot, String> {
                 .collect(),
         })
         .collect();
+    let tickets = core
+        .cached_tickets()
+        .iter()
+        .map(|t| TicketDto {
+            id: t.id.clone(),
+            number: t.ticket_number,
+            cashier: t.cashier.clone(),
+            total: t.total,
+        })
+        .collect();
+    let presets = core.presets().iter().map(|p| p.name.clone()).collect();
+
     Ok(AppSnapshot {
         version: core.version(),
         mode: format!("{:?}", core.mode()),
         blocked: mpa_agent::gate::reason(),
         jobs,
+        tickets,
+        presets,
     })
 }
 
@@ -163,4 +188,56 @@ pub fn doctor(state: State<'_, AppState>) -> Result<Vec<CheckDto>, String> {
     });
 
     Ok(rows)
+}
+
+/// Where the draft goes: a new ticket line set, an open ticket, or nowhere yet.
+#[tauri::command]
+pub fn select_target(
+    state: State<'_, AppState>,
+    printer: String,
+    job_id: u32,
+    kind: String,
+    ticket_id: Option<String>,
+) -> Result<(), String> {
+    let target = match kind.as_str() {
+        "newDraft" => mpa_agent::TargetSelection::NewDraft,
+        "ticket" => match ticket_id {
+            Some(id) if !id.is_empty() => mpa_agent::TargetSelection::Ticket(id),
+            _ => return Err("falta el ticket".into()),
+        },
+        _ => mpa_agent::TargetSelection::Unassigned,
+    };
+    let mut core = lock(&state.core)?;
+    core.select_target(&printer, job_id, target)
+        .map_err(|e| e.to_string())
+}
+
+/// Print preset for this job (`None` keeps the driver's own settings).
+#[tauri::command]
+pub fn set_preset(
+    state: State<'_, AppState>,
+    printer: String,
+    job_id: u32,
+    preset: Option<String>,
+) -> Result<(), String> {
+    let mut core = lock(&state.core)?;
+    core.set_preset(&printer, job_id, preset)
+        .map_err(|e| e.to_string())
+}
+
+/// B/N or color for this job: it decides which rule set prices the pages.
+#[tauri::command]
+pub fn set_print_mode(
+    state: State<'_, AppState>,
+    printer: String,
+    job_id: u32,
+    mode: String,
+) -> Result<(), String> {
+    let parsed = match mode.as_str() {
+        "Color" => mpa_domain::PrintMode::Color,
+        _ => mpa_domain::PrintMode::Bw,
+    };
+    let mut core = lock(&state.core)?;
+    core.set_print_mode(&printer, job_id, parsed)
+        .map_err(|e| e.to_string())
 }

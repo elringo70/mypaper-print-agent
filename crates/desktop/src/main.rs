@@ -18,6 +18,9 @@ use mpa_agent::{
 use mpa_sync::{HttpTickets, PairingStore, SyncClient};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tauri::menu::{Menu, MenuItem};
+use tauri::Manager;
+use tauri::tray::TrayIconBuilder;
 
 pub struct AppState {
     pub core: Arc<Mutex<AgentCore>>,
@@ -82,6 +85,7 @@ fn main() {
 
     let core = Arc::new(Mutex::new(core));
     let runtime = AgentRuntime::start(Arc::clone(&core), policy, Duration::from_millis(2000));
+    spawn_ticket_refresh(Arc::clone(&core));
     mpa_agent::log::info(format!(
         "starting mpa-desktop v{}",
         env!("CARGO_PKG_VERSION")
@@ -97,8 +101,71 @@ fn main() {
             commands::toggle_page,
             commands::complete_job,
             commands::cancel_job,
+            commands::select_target,
+            commands::set_preset,
+            commands::set_print_mode,
             commands::doctor,
         ])
+        .setup(|app| {
+            build_tray(app)?;
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Closing the window hides it to the tray: the agent keeps holding
+            // jobs, and quitting is an explicit menu action.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .run(tauri::generate_context!())
         .expect("the window failed to start");
+}
+
+/// Tray icon and menu: show the window, or quit for real.
+fn build_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    let open = MenuItem::with_id(app, "open", "Abrir MyPaper", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Salir", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open, &quit])?;
+
+    let icon = app
+        .default_window_icon()
+        .cloned()
+        .ok_or("el binario no tiene icono embebido")?;
+
+    TrayIconBuilder::new()
+        .icon(icon)
+        .tooltip("MyPaper Print Agent")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "open" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .build(app)?;
+    Ok(())
+}
+
+/// Refresh the open-ticket list off the core lock, the same discipline the
+/// watcher and the reprint sweep follow: the window polls every second and must
+/// never wait on an HTTP call.
+fn spawn_ticket_refresh(core: Arc<Mutex<AgentCore>>) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(30));
+        let source = match core.lock() {
+            Ok(core) => core.ticket_source(),
+            Err(_) => continue,
+        };
+        if let Ok(tickets) = source.list_open_tickets() {
+            if let Ok(mut core) = core.lock() {
+                core.set_cached_tickets(tickets);
+            }
+        }
+    });
 }

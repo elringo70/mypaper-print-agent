@@ -14,6 +14,19 @@ pub struct AppSnapshot {
     /// moved backwards). The UI shows it as a banner, not as an error dialog.
     pub blocked: Option<String>,
     pub jobs: Vec<JobDto>,
+    /// Open tickets to attach a draft to. Empty when offline or unpaired.
+    pub tickets: Vec<TicketDto>,
+    /// Print presets from `config.toml`, by name.
+    pub presets: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TicketDto {
+    pub id: String,
+    pub number: i32,
+    pub cashier: String,
+    pub total: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -27,6 +40,12 @@ pub struct JobDto {
     pub analysis_error: Option<String>,
     pub warnings: Vec<String>,
     pub format: Option<String>,
+    /// "unassigned" | "newDraft" | "ticket"
+    pub target: String,
+    pub target_ticket_id: Option<String>,
+    pub preset: Option<String>,
+    /// "Bw" | "Color"
+    pub print_mode: String,
     pub price: Option<f32>,
 }
 

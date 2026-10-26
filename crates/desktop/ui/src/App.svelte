@@ -59,6 +59,36 @@
 		}
 	}
 
+	async function setTarget(job: JobDto, kind: 'newDraft' | 'ticket' | 'unassigned', ticketId?: string) {
+		error = null;
+		try {
+			await api.selectTarget(job.printer, job.jobId, kind, ticketId ?? null);
+			seen = -1;
+		} catch (e) {
+			error = String(e);
+		}
+	}
+
+	async function setPreset(job: JobDto, preset: string) {
+		error = null;
+		try {
+			await api.setPreset(job.printer, job.jobId, preset || null);
+			seen = -1;
+		} catch (e) {
+			error = String(e);
+		}
+	}
+
+	async function setMode(job: JobDto, mode: 'Bw' | 'Color') {
+		error = null;
+		try {
+			await api.setPrintMode(job.printer, job.jobId, mode);
+			seen = -1;
+		} catch (e) {
+			error = String(e);
+		}
+	}
+
 	function included(job: JobDto) {
 		return job.pages.filter((p) => p.included).length;
 	}
@@ -158,6 +188,50 @@
 						{#each current.warnings as w}<li>{w}</li>{/each}
 					</ul>
 				{/if}
+
+				<div class="controls">
+					<div class="field">
+						<span class="label">Destino</span>
+						<select
+							value={current.target === 'ticket' ? `ticket:${current.targetTicketId}` : current.target}
+							onchange={(e) => {
+								const v = e.currentTarget.value;
+								if (v.startsWith('ticket:')) setTarget(current, 'ticket', v.slice(7));
+								else setTarget(current, v as 'newDraft' | 'unassigned');
+							}}
+						>
+							<option value="unassigned">Sin asignar</option>
+							<option value="newDraft">Nuevo borrador</option>
+							{#each snapshot?.tickets ?? [] as t (t.id)}
+								<option value={`ticket:${t.id}`}>Ticket #{t.number} · {t.cashier} · ${t.total}</option>
+							{/each}
+						</select>
+					</div>
+
+					<div class="field">
+						<span class="label">Modo</span>
+						<div class="toggle">
+							<button
+								class:active={current.printMode === 'Bw'}
+								onclick={() => setMode(current, 'Bw')}>B/N</button
+							>
+							<button
+								class:active={current.printMode === 'Color'}
+								onclick={() => setMode(current, 'Color')}>Color</button
+							>
+						</div>
+					</div>
+
+					<div class="field">
+						<span class="label">Preset</span>
+						<select value={current.preset ?? ''} onchange={(e) => setPreset(current, e.currentTarget.value)}>
+							<option value="">Del controlador</option>
+							{#each snapshot?.presets ?? [] as name (name)}
+								<option value={name}>{name}</option>
+							{/each}
+						</select>
+					</div>
+				</div>
 
 				<div class="pages">
 					{#each current.pages as page (page.pageNo)}
@@ -367,6 +441,53 @@
 		padding-left: 18px;
 		color: #f0c98a;
 		font-size: 12px;
+	}
+	.controls {
+		display: flex;
+		gap: 18px;
+		align-items: flex-end;
+		flex-wrap: wrap;
+		margin-top: 12px;
+		padding: 10px 12px;
+		border: 1px solid #1e2430;
+		border-radius: 10px;
+		background: #12171f;
+	}
+	.field {
+		display: grid;
+		gap: 4px;
+	}
+	.label {
+		font-size: 11px;
+		text-transform: uppercase;
+		letter-spacing: 0.6px;
+		color: #7d8798;
+	}
+	select {
+		background: #0f141b;
+		color: #e6e9ef;
+		border: 1px solid #2a3442;
+		border-radius: 8px;
+		padding: 6px 8px;
+		font: inherit;
+		min-width: 170px;
+	}
+	.toggle {
+		display: inline-flex;
+		border: 1px solid #2a3442;
+		border-radius: 8px;
+		overflow: hidden;
+	}
+	.toggle button {
+		background: transparent;
+		color: #c8d3e2;
+		border: 0;
+		padding: 6px 12px;
+	}
+	.toggle button.active {
+		background: #38bdf8;
+		color: #06202b;
+		font-weight: 600;
 	}
 	.pages {
 		margin-top: 12px;

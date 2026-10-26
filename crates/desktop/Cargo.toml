@@ -19,7 +19,7 @@ mpa-agent = { path = "../agent" }
 mpa-spool = { path = "../spool" }
 mpa-sync = { path = "../sync" }
 mpa-update = { path = "../update" }
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
