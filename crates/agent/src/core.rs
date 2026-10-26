@@ -1,8 +1,6 @@
 use crate::reprint::{cache_spool_bytes, cleanup_spool_file, ReprintError};
 use crate::tickets::{Ticket, TicketError, TicketSource};
-use mpa_analyzer::{
-    analyze_bytes, capture_spool_file, AnalyzeError, CaptureError, Ghostscript, SpoolFormat,
-};
+use mpa_analyzer::{analyze_bytes, capture_spool_file, AnalyzeError, CaptureError, SpoolFormat};
 use mpa_domain::{transition, Coverage, JobEvent, JobState, PrintMode, Tier};
 use mpa_spool::{SpoolBackend, SpoolError};
 use std::collections::HashMap;
@@ -227,8 +225,7 @@ pub fn analyze_spool(
             });
         }
     };
-    let gs = Ghostscript::discover().ok();
-    let analysis = match analyze_bytes(&spool.data, gs.as_ref()) {
+    let analysis = match analyze_bytes(&spool.data) {
         Ok(analysis) => analysis,
         Err(e) => {
             return Err(AnalysisFailure {

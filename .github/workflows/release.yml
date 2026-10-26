@@ -17,6 +17,10 @@ jobs:
         with:
           toolchain: stable
 
+      - name: Fetch pdfium
+        shell: pwsh
+        run: ./packaging/fetch-pdfium.ps1
+
       - name: Tests + lints
         run: |
           cargo test --workspace --locked

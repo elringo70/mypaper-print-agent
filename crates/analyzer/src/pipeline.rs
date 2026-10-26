@@ -1,10 +1,18 @@
+//! Turns a spool payload into per-page measurements.
+//!
+//! One path for every input: decode or rasterize to pixels, then measure with
+//! [`crate::classify`]. There is deliberately no second estimator and no
+//! external process, so the same document always yields the same numbers.
+//!
+//! Supported payloads are PDF (pdfium), EMF (GDI playback on Windows) and
+//! raster images. PostScript, XPS and PCL are rejected explicitly: they would
+//! need an AGPL renderer, and a silent "unanalyzable" job is worse than a clear
+//! error the operator can act on.
+
 use crate::classify::{analyze_image, PageMetrics, Thresholds};
-use crate::convert::{convert_to_pdf, ConvertError};
 use crate::format::{detect_format, image_format_from_extension, SpoolFormat};
-use crate::gs::{Ghostscript, GsError};
 use crate::raster::thumbnail_png;
 use mpa_domain::Coverage;
-use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 /// Server cap mirror (`printJobCreateSchema`, max 500 pages): analyzing more
@@ -20,10 +28,8 @@ pub enum AnalyzeError {
     UnsupportedFormat(SpoolFormat),
     #[error("too many pages: {pages} (limit {MAX_ANALYZE_PAGES}); split the document")]
     TooManyPages { pages: usize },
-    #[error("ghostscript: {0}")]
-    Ghostscript(#[from] GsError),
-    #[error("normalize to PDF: {0}")]
-    Convert(#[from] ConvertError),
+    #[error("PDF analysis requires the pdfium engine, which is not available")]
+    NoPdfEngine,
     #[error("emf: {0}")]
     Emf(#[from] crate::emf::EmfError),
     #[cfg(feature = "pdfium")]
@@ -40,10 +46,9 @@ pub struct PageAnalysis {
     pub page_no: u32,
     pub coverage: Coverage,
     pub thumbnail_png: Vec<u8>,
-    /// Full pixel metrics, when the payload was actually measured rather than
-    /// estimated by a device. Carries the page class and the area coverage the
-    /// tier ladder bills on. `None` on the legacy PDF path until the renderer
-    /// lands; callers must not infer a class from `Option`.
+    /// Full pixel metrics: page class, area coverage and the channel fractions
+    /// the tier ladder bills on. `None` only if the bitmap could not be
+    /// measured, which the caller must not read as "blank".
     pub metrics: Option<PageMetrics>,
 }
 
@@ -53,65 +58,20 @@ pub struct JobAnalysis {
     pub format: SpoolFormat,
 }
 
-/// Analyze a spool payload. PDF/PS go through Ghostscript `inkcov`
-/// (true channel coverage) plus a 72 DPI render for previews; images go
-/// through the in-house raster estimator. EMF, XPS and PCL payloads are
-/// normalized to PDF first (GDI playback, gxps, GhostPCL) and then take the
-/// very same PDF path.
-pub fn analyze_bytes(data: &[u8], gs: Option<&Ghostscript>) -> Result<JobAnalysis, AnalyzeError> {
+/// Analyze a spool payload.
+pub fn analyze_bytes(data: &[u8]) -> Result<JobAnalysis, AnalyzeError> {
     let format = detect_format(data);
-    let mut analysis = match format {
-        SpoolFormat::Image => {
-            let img = image::load_from_memory(data)?;
-            let metrics = analyze_image(&img);
-            let coverage = metrics
-                .map(|m| m.coverage())
-                .unwrap_or(Coverage::new(0.0, 0.0, 0.0, 0.0));
-            JobAnalysis {
-                pages: vec![PageAnalysis {
-                    page_no: 1,
-                    coverage,
-                    thumbnail_png: thumbnail_png(&img, 256),
-                    metrics,
-                }],
-                format: SpoolFormat::Image,
-            }
-        }
-        SpoolFormat::Pdf => analyze_pdf_best(data, gs)?,
-        SpoolFormat::PostScript => {
-            let gs = gs.ok_or(AnalyzeError::Ghostscript(crate::gs::GsError::NotFound))?;
-            analyze_pdf_bytes(data, gs)?
-        }
-        // GDI applications spool EMF: measured directly on Windows, normalized
-        // elsewhere. XPS and PCL are not measurable with free tooling and go
-        // through the legacy conversion only when Ghostscript is present.
-        SpoolFormat::Emf => analyze_emf_best(data, gs)?,
-        SpoolFormat::Xps | SpoolFormat::Pcl => {
-            let gs = gs.ok_or(AnalyzeError::Ghostscript(crate::gs::GsError::NotFound))?;
-            let pdf = convert_to_pdf(data, format, gs)?;
-            analyze_pdf_bytes(&pdf, gs)?
-        }
+    let pages = match format {
+        SpoolFormat::Image => vec![image_page(data)?],
+        SpoolFormat::Pdf => analyze_pdf(data)?,
+        SpoolFormat::Emf => analyze_emf(data)?,
         other => return Err(AnalyzeError::UnsupportedFormat(other)),
     };
-    // The reported format is the SOURCE payload, never the intermediate PDF:
-    // the outbox reprint reconverts the cached spool bytes with it.
-    analysis.format = format;
-    Ok(analysis)
-}
-
-/// Write the payload to a temp file and run the PDF analysis over it.
-fn analyze_pdf_bytes(data: &[u8], gs: &Ghostscript) -> Result<JobAnalysis, AnalyzeError> {
-    let dir = unique_temp_dir()?;
-    let input = dir.join("job.bin");
-    std::fs::write(&input, data)?;
-    let result = analyze_pdf_file(&input, gs);
-    let _ = std::fs::remove_dir_all(&dir);
-    result
+    Ok(JobAnalysis { pages, format })
 }
 
 /// Analyze a file on disk. Extension decides images; content decides the rest.
-/// Ghostscript is only required for PDF/PS payloads.
-pub fn analyze_file(path: &Path, gs: Option<&Ghostscript>) -> Result<JobAnalysis, AnalyzeError> {
+pub fn analyze_file(path: &std::path::Path) -> Result<JobAnalysis, AnalyzeError> {
     if image_format_from_extension(path) {
         let img = image::open(path)?;
         let metrics = analyze_image(&img);
@@ -129,15 +89,43 @@ pub fn analyze_file(path: &Path, gs: Option<&Ghostscript>) -> Result<JobAnalysis
         });
     }
     let data = std::fs::read(path)?;
-    analyze_bytes(&data, gs)
+    analyze_bytes(&data)
 }
 
-/// Rejects oversized documents before the expensive thumbnail render.
-fn check_page_cap(pages: usize) -> Result<(), AnalyzeError> {
-    if pages > MAX_ANALYZE_PAGES {
-        return Err(AnalyzeError::TooManyPages { pages });
+/// Render selected pages of a payload to pixels. Used by the reprint path,
+/// which must show the printer the same pages the analyzer priced.
+pub fn render_pages(
+    data: &[u8],
+    format: SpoolFormat,
+    pages: &[u32],
+    dpi: u32,
+) -> Result<Vec<image::RgbaImage>, AnalyzeError> {
+    if pages.is_empty() {
+        return Ok(Vec::new());
     }
-    Ok(())
+    match format {
+        SpoolFormat::Pdf => render_pdf_pages(data, pages, dpi),
+        SpoolFormat::Emf => render_emf_pages(data, pages, dpi),
+        SpoolFormat::Image => {
+            let img = image::load_from_memory(data)?;
+            Ok(vec![img.to_rgba8()])
+        }
+        other => Err(AnalyzeError::UnsupportedFormat(other)),
+    }
+}
+
+fn image_page(data: &[u8]) -> Result<PageAnalysis, AnalyzeError> {
+    let img = image::load_from_memory(data)?;
+    let metrics = analyze_image(&img);
+    let coverage = metrics
+        .map(|m| m.coverage())
+        .unwrap_or(Coverage::new(0.0, 0.0, 0.0, 0.0));
+    Ok(PageAnalysis {
+        page_no: 1,
+        coverage,
+        thumbnail_png: thumbnail_png(&img, 256),
+        metrics,
+    })
 }
 
 /// Previews past the budget render as placeholders (the UI already does).
@@ -147,7 +135,6 @@ fn wants_thumbnail(page_no: u32) -> bool {
 
 /// One measured page: pixel metrics, the coverage derived from them, and a
 /// preview when the page is inside the thumbnail budget.
-#[cfg(any(windows, feature = "pdfium"))]
 fn measured_page(page_no: u32, img: image::RgbaImage) -> PageAnalysis {
     let img = image::DynamicImage::ImageRgba8(img);
     let metrics = analyze_image(&img);
@@ -167,20 +154,8 @@ fn measured_page(page_no: u32, img: image::RgbaImage) -> PageAnalysis {
     }
 }
 
-/// PDF measurement: pdfium when it is provisioned, otherwise the legacy
-/// Ghostscript path. Only the pdfium path yields a page class and area
-/// coverage, which is what the tier ladder bills on.
-fn analyze_pdf_best(data: &[u8], gs: Option<&Ghostscript>) -> Result<JobAnalysis, AnalyzeError> {
-    #[cfg(feature = "pdfium")]
-    if crate::pdf::available() {
-        return analyze_pdf_with_pdfium(data);
-    }
-    let gs = gs.ok_or(AnalyzeError::Ghostscript(GsError::NotFound))?;
-    analyze_pdf_bytes(data, gs)
-}
-
 #[cfg(feature = "pdfium")]
-fn analyze_pdf_with_pdfium(data: &[u8]) -> Result<JobAnalysis, AnalyzeError> {
+fn analyze_pdf(data: &[u8]) -> Result<Vec<PageAnalysis>, AnalyzeError> {
     let count = crate::pdf::page_count(data)?;
     check_page_cap(count)?;
     let dpi = Thresholds::default().dpi;
@@ -189,92 +164,110 @@ fn analyze_pdf_with_pdfium(data: &[u8]) -> Result<JobAnalysis, AnalyzeError> {
         let img = crate::pdf::render_page(data, index, dpi)?;
         pages.push(measured_page((index + 1) as u32, img));
     }
-    Ok(JobAnalysis {
-        pages,
-        format: SpoolFormat::Pdf,
-    })
+    Ok(pages)
 }
 
-/// EMF measurement: GDI playback on Windows, legacy normalization elsewhere.
-fn analyze_emf_best(data: &[u8], gs: Option<&Ghostscript>) -> Result<JobAnalysis, AnalyzeError> {
-    #[cfg(windows)]
-    {
-        // Ghostscript is only a fallback off Windows; nothing to convert here.
-        let _ = gs;
-        let split = crate::emf::split_pages(data)?;
-        check_page_cap(split.len())?;
-        let dpi = Thresholds::default().dpi;
-        let mut pages = Vec::with_capacity(split.len());
-        for (index, page) in split.iter().enumerate() {
-            let img = crate::emf::rasterize_page(&page.bytes, page.width_mm, page.height_mm, dpi)?;
-            pages.push(measured_page((index + 1) as u32, img));
-        }
-        Ok(JobAnalysis {
-            pages,
-            format: SpoolFormat::Emf,
-        })
-    }
-    #[cfg(not(windows))]
-    {
-        let gs = gs.ok_or(AnalyzeError::Ghostscript(GsError::NotFound))?;
-        let pdf = convert_to_pdf(data, SpoolFormat::Emf, gs)?;
-        analyze_pdf_bytes(&pdf, gs)
-    }
+#[cfg(not(feature = "pdfium"))]
+fn analyze_pdf(_data: &[u8]) -> Result<Vec<PageAnalysis>, AnalyzeError> {
+    Err(AnalyzeError::NoPdfEngine)
 }
 
-fn analyze_pdf_file(input: &Path, gs: &Ghostscript) -> Result<JobAnalysis, AnalyzeError> {
-    let fractions = gs.inkcov(input)?;
-    check_page_cap(fractions.len())?;
-    let dir = unique_temp_dir()?;
-    let pattern = dir.join("thumb-%d.png");
-    gs.render_png_pages(input, 72, &pattern)?;
-    let mut pages = Vec::with_capacity(fractions.len());
-    for (i, f) in fractions.iter().enumerate() {
-        let page_no = (i + 1) as u32;
-        let thumbnail_png = if wants_thumbnail(page_no) {
-            let thumb_path = dir.join(format!("thumb-{page_no}.png"));
-            std::fs::read(&thumb_path).unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-        pages.push(PageAnalysis {
-            page_no,
-            coverage: Coverage::new(f[0] * 100.0, f[1] * 100.0, f[2] * 100.0, f[3] * 100.0),
-            thumbnail_png,
-            metrics: None,
-        });
+#[cfg(feature = "pdfium")]
+fn render_pdf_pages(
+    data: &[u8],
+    pages: &[u32],
+    dpi: u32,
+) -> Result<Vec<image::RgbaImage>, AnalyzeError> {
+    let mut out = Vec::with_capacity(pages.len());
+    for page_no in pages {
+        out.push(crate::pdf::render_page(data, *page_no as usize - 1, dpi)?);
     }
-    let _ = std::fs::remove_dir_all(&dir);
-    Ok(JobAnalysis {
-        pages,
-        format: SpoolFormat::Pdf,
-    })
+    Ok(out)
 }
 
-fn unique_temp_dir() -> Result<PathBuf, std::io::Error> {
-    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("mpa-{}-{n}", std::process::id()));
-    std::fs::create_dir_all(&dir)?;
-    Ok(dir)
+#[cfg(not(feature = "pdfium"))]
+fn render_pdf_pages(
+    _data: &[u8],
+    _pages: &[u32],
+    _dpi: u32,
+) -> Result<Vec<image::RgbaImage>, AnalyzeError> {
+    Err(AnalyzeError::NoPdfEngine)
+}
+
+#[cfg(windows)]
+fn analyze_emf(data: &[u8]) -> Result<Vec<PageAnalysis>, AnalyzeError> {
+    let split = crate::emf::split_pages(data)?;
+    check_page_cap(split.len())?;
+    let dpi = Thresholds::default().dpi;
+    let mut pages = Vec::with_capacity(split.len());
+    for (index, page) in split.iter().enumerate() {
+        let img = crate::emf::rasterize_page(&page.bytes, page.width_mm, page.height_mm, dpi)?;
+        pages.push(measured_page((index + 1) as u32, img));
+    }
+    Ok(pages)
+}
+
+/// EMF needs GDI playback; elsewhere the payload cannot be measured and the
+/// caller is told so instead of getting a silent blank page.
+#[cfg(not(windows))]
+fn analyze_emf(_data: &[u8]) -> Result<Vec<PageAnalysis>, AnalyzeError> {
+    Err(AnalyzeError::Emf(crate::emf::EmfError::NeedsWindows))
+}
+
+#[cfg(windows)]
+fn render_emf_pages(
+    data: &[u8],
+    pages: &[u32],
+    dpi: u32,
+) -> Result<Vec<image::RgbaImage>, AnalyzeError> {
+    let split = crate::emf::split_pages(data)?;
+    let mut out = Vec::with_capacity(pages.len());
+    for page_no in pages {
+        let page = *page_no as usize;
+        let emf = split
+            .get(page.saturating_sub(1))
+            .ok_or(AnalyzeError::TooManyPages { pages: page })?;
+        out.push(crate::emf::rasterize_page(
+            &emf.bytes,
+            emf.width_mm,
+            emf.height_mm,
+            dpi,
+        )?);
+    }
+    Ok(out)
+}
+
+#[cfg(not(windows))]
+fn render_emf_pages(
+    _data: &[u8],
+    _pages: &[u32],
+    _dpi: u32,
+) -> Result<Vec<image::RgbaImage>, AnalyzeError> {
+    Err(AnalyzeError::Emf(crate::emf::EmfError::NeedsWindows))
+}
+
+/// Rejects oversized documents before the expensive render.
+fn check_page_cap(pages: usize) -> Result<(), AnalyzeError> {
+    if pages > MAX_ANALYZE_PAGES {
+        return Err(AnalyzeError::TooManyPages { pages });
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn gs_or_skip() -> Option<Ghostscript> {
-        Ghostscript::discover().ok()
-    }
-
     #[test]
     fn image_bytes_analyze_end_to_end() {
-        // 2x1 PPM: one white pixel, one black pixel → K = 50%.
+        // 2x1 PPM: one white pixel, one black pixel -> K = 50%.
         let ppm: Vec<u8> = b"P6\n2 1\n255\n\xFF\xFF\xFF\x00\x00\x00".to_vec();
-        let analysis = analyze_bytes(&ppm, None).unwrap();
+        let analysis = analyze_bytes(&ppm).unwrap();
         assert_eq!(analysis.pages.len(), 1);
         assert!((analysis.pages[0].coverage.k - 50.0).abs() < 1e-3);
         assert!(!analysis.pages[0].thumbnail_png.is_empty());
+        let metrics = analysis.pages[0].metrics.expect("image path measures");
+        assert_eq!(metrics.class, crate::classify::PageClass::Mono);
     }
 
     #[test]
@@ -296,115 +289,66 @@ mod tests {
     #[test]
     fn unknown_payload_fails_explicitly() {
         assert!(matches!(
-            analyze_bytes(b"whatever", None),
+            analyze_bytes(b"whatever"),
             Err(AnalyzeError::UnsupportedFormat(SpoolFormat::Unknown))
         ));
     }
 
-    /// EMF and PCL spools must reach the PDF normalization step (GDI /
-    /// GhostPCL) instead of coming back as "unsupported spool format" — that
-    /// rejection is what left every PCL laser printer unanalyzable.
+    /// PostScript, XPS and PCL are out of scope by decision: they need an AGPL
+    /// renderer. The error names the format instead of pretending it worked.
     #[test]
-    fn emf_and_pcl_route_to_normalization() {
-        let emf = vec![1u8, 0, 0, 0, 88, 0, 0, 0, 0, 0];
-        let pcl = vec![0x1Bu8, b'E', 0x1B, b'&', b'l', b'0', b'A'];
-        for payload in [emf, pcl] {
+    fn non_free_formats_are_rejected_by_name() {
+        for (payload, format) in [
+            (b"%!PS-Adobe-3.0\n".to_vec(), SpoolFormat::PostScript),
+            (vec![0x50, 0x4B, 0x03, 0x04, 0], SpoolFormat::Xps),
+            (vec![0x1Bu8, b'E', 0x1B, b'&', b'l'], SpoolFormat::Pcl),
+        ] {
             assert!(
                 matches!(
-                    analyze_bytes(&payload, None),
-                    Err(AnalyzeError::Ghostscript(_))
+                    analyze_bytes(&payload),
+                    Err(AnalyzeError::UnsupportedFormat(f)) if f == format
                 ),
-                "must reach the conversion step, not UnsupportedFormat"
+                "{format:?} must be rejected by name"
             );
         }
-    }
-
-    /// Same routing with Ghostscript available: whatever goes wrong now must
-    /// go wrong *inside* the conversion (e.g. "GhostPCL (gpcl6) not found"),
-    /// which the operator can act on.
-    #[test]
-    fn pcl_never_reports_unsupported_format_with_ghostscript() {
-        let Some(gs) = gs_or_skip() else { return };
-        let pcl = vec![0x1Bu8, b'E', 0x1B, b'&', b'l', b'0', b'A'];
-        if let Err(e) = analyze_bytes(&pcl, Some(&gs)) {
-            assert!(
-                !matches!(e, AnalyzeError::UnsupportedFormat(_)),
-                "routed nowhere: {e:?}"
-            );
-        }
-    }
-
-    /// End-to-end PCL: render a real PCL payload with Ghostscript's `ljet4`
-    /// device, then analyze it through GhostPCL. Skipped where either tool is
-    /// missing (CI Linux), exercised on the Windows build machine.
-    #[test]
-    fn pcl_roundtrip_survives_the_conversion() {
-        use crate::convert::find_pcl_interpreter;
-        let Some(gs) = gs_or_skip() else { return };
-        if find_pcl_interpreter().is_none() {
-            return;
-        }
-        let dir = unique_temp_dir().unwrap();
-        let ps = dir.join("in.ps");
-        std::fs::write(
-            &ps,
-            b"%!PS\n0 0 0 setrgbcolor 100 100 200 200 rectfill showpage\n",
-        )
-        .unwrap();
-        let pcl_path = dir.join("out.pcl");
-        let rendered = std::process::Command::new(gs.program())
-            .arg("-q")
-            .arg("-dBATCH")
-            .arg("-dNOPAUSE")
-            .arg("-sDEVICE=ljet4")
-            .arg(format!("-o{}", pcl_path.display()))
-            .arg(&ps)
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if !rendered {
-            return; // Ghostscript built without the PCL-ish devices
-        }
-        let pcl = std::fs::read(&pcl_path).unwrap();
-        assert_eq!(detect_format(&pcl), SpoolFormat::Pcl, "fixture is not PCL");
-
-        let analysis = analyze_bytes(&pcl, Some(&gs)).expect("PCL must analyze");
-        assert_eq!(
-            analysis.format,
-            SpoolFormat::Pcl,
-            "the outbox reprint reconverts the cached spool bytes, so the \
-             source format must survive the normalization"
-        );
-        assert_eq!(analysis.pages.len(), 1);
-        assert!(
-            analysis.pages[0].coverage.k > 0.0,
-            "the filled rectangle must show up as ink"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[cfg(not(feature = "pdfium"))]
     #[test]
-    fn pdf_without_ghostscript_fails_clearly() {
-        let pdf = minimal_pdf();
+    fn pdf_without_pdfium_says_so() {
         assert!(matches!(
-            analyze_bytes(&pdf, None),
-            Err(AnalyzeError::Ghostscript(_))
+            analyze_bytes(&minimal_pdf()),
+            Err(AnalyzeError::NoPdfEngine)
+        ));
+    }
+
+    #[cfg(feature = "pdfium")]
+    #[test]
+    fn blank_pdf_measures_as_blank() {
+        if !crate::pdf::available() {
+            return;
+        }
+        let analysis = analyze_bytes(&minimal_pdf()).expect("pdfium measures");
+        assert_eq!(analysis.format, SpoolFormat::Pdf);
+        assert_eq!(analysis.pages.len(), 1);
+        let metrics = analysis.pages[0].metrics.expect("pdfium path measures");
+        assert_eq!(metrics.class, crate::classify::PageClass::Blanco);
+        assert!(!metrics.class.is_billable());
+    }
+
+    #[test]
+    fn render_pages_rejects_unsupported_formats() {
+        assert!(matches!(
+            render_pages(b"\x1B E", SpoolFormat::Pcl, &[1], 150),
+            Err(AnalyzeError::UnsupportedFormat(SpoolFormat::Pcl))
         ));
     }
 
     #[test]
-    fn pdf_needs_ghostscript() {
-        let Some(gs) = gs_or_skip() else { return };
-        let dir = unique_temp_dir().unwrap();
-        let input = dir.join("blank.pdf");
-        // Single blank page PDF (valid xref computed at runtime).
-        let pdf = minimal_pdf();
-        std::fs::write(&input, pdf).unwrap();
-        let analysis = analyze_pdf_file(&input, &gs).unwrap();
-        assert_eq!(analysis.pages.len(), 1);
-        assert!(analysis.pages[0].coverage.color_coverage() < 1.0);
-        let _ = std::fs::remove_dir_all(&dir);
+    fn render_pages_of_nothing_is_empty() {
+        assert!(render_pages(b"%PDF-1.4", SpoolFormat::Pdf, &[], 150)
+            .unwrap()
+            .is_empty());
     }
 
     /// Builds a minimal one-page blank PDF with a correct xref table.

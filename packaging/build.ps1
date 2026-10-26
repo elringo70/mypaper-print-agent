@@ -17,6 +17,10 @@ Set-Location $root
 $version = (Select-String -Path crates/ui/Cargo.toml -Pattern '^version = "(.*)"').Matches.Groups[1].Value
 Write-Host "== mpa $version =="
 
+# Rasterizador PDF: sin esta DLL el análisis de PDF no arranca.
+& (Join-Path $root "packaging\fetch-pdfium.ps1")
+if ($LASTEXITCODE -ne 0) { exit 1 }
+
 if (-not $SkipTests) {
     cargo test --workspace --locked
     if ($LASTEXITCODE -ne 0) { exit 1 }

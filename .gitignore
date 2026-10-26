@@ -3,3 +3,5 @@
 # Release signing key: NEVER commit. Back it up offline and store a copy in
 # the release workflow secrets (MPA_MINISIGN_KEY).
 packaging/minisign.key
+# pdfium shared library, fetched by packaging/fetch-pdfium.ps1
+/vendor/pdfium/

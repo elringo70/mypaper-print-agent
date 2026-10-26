@@ -4,7 +4,7 @@ use mpa_agent::{
     load_roles, load_tiers, save_metrics, save_policy, save_presets, save_roles, save_tiers,
     save_to, AgentCore, ConfigError, MockTickets, OutboxEntry, OutboxPage, TargetSelection,
 };
-use mpa_analyzer::{analyze_file, capture_spool_file, Ghostscript};
+use mpa_analyzer::{analyze_file, capture_spool_file};
 use mpa_domain::{
     classify_coverage, has_color_ink, metric_coverage, transition, Coverage, JobEvent, JobState,
     PolicyMode, PrintMode, Tier,
@@ -641,32 +641,16 @@ fn doctor_command(config_override: Option<PathBuf>) -> Result<(), AppError> {
         Err(e) => check(&mut rows, Health::Fail, format!("spooler inaccesible: {e}")),
     };
 
-    // Analysis toolchain.
-    match mpa_analyzer::Ghostscript::discover() {
-        Ok(gs) => check(
+    // PDF engine: pdfium must be next to the binary or on the search path.
+    if mpa_analyzer::pdf::available() {
+        check(&mut rows, Health::Ok, "pdfium: motor PDF disponible".into());
+    } else {
+        check(
             &mut rows,
-            Health::Ok,
-            format!("ghostscript: {}", gs.program().display()),
-        ),
-        Err(_) => check(
-            &mut rows,
-            Health::Warn,
-            "ghostscript ausente: sin análisis PDF/PS/XPS (solo imágenes)".into(),
-        ),
-    };
-    match mpa_analyzer::find_pcl_interpreter() {
-        Some(path) => check(
-            &mut rows,
-            Health::Ok,
-            format!("ghostpcl: {}", path.display()),
-        ),
-        None => check(
-            &mut rows,
-            Health::Warn,
-            "gpcl6 ausente: las reimpresiones PCL quedarán pendientes".into(),
-        ),
-    };
-
+            Health::Fail,
+            "pdfium ausente: sin análisis de PDF (reinstala o define MPA_PDFIUM)".into(),
+        );
+    }
     // Pairing + server.
     let pairing = mpa_sync::PairingStore::load(None).ok();
     match &pairing {
@@ -1284,9 +1268,7 @@ fn analyze_command(
     tiers: Option<String>,
     thumbs_dir: Option<PathBuf>,
 ) -> Result<(), AppError> {
-    // Images analyze without Ghostscript; PDFs need it.
-    let gs = Ghostscript::discover().ok();
-    let analysis = analyze_file(&file, gs.as_ref()).map_err(AppError::Analyze)?;
+    let analysis = analyze_file(&file).map_err(AppError::Analyze)?;
     let tiers = tiers
         .map(|s| parse_tiers(&s))
         .transpose()?

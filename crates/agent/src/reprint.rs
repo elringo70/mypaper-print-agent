@@ -1,26 +1,24 @@
 use crate::core::OutboxEntry;
-#[cfg(windows)]
-use mpa_analyzer::print_pdf_to_winprinter;
-use mpa_analyzer::{convert_to_pdf, extract_pages_pdf, Ghostscript, SpoolFormat};
+use mpa_analyzer::{print_images, render_pages, SpoolFormat};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
+
+/// Reprints are rendered at 300 dpi: the customer already accepted the sheet,
+/// so the reprint should look at least as good as the original.
+const REPRINT_DPI: u32 = 300;
 
 #[derive(Debug, Error)]
 pub enum ReprintError {
     #[error("no cached spool file")]
     NoSpoolFile,
-    #[error("subset reprint unsupported for {0:?} (PDF, PS, XPS, PCL, EMF only)")]
+    #[error("no pages selected")]
+    EmptySelection,
+    #[error("subset reprint unsupported for {0:?}")]
     UnsupportedFormat(SpoolFormat),
-    #[error("normalize to PDF: {0}")]
-    Convert(String),
-    #[error("ghostscript unavailable: {0}")]
-    Ghostscript(String),
-    #[error("extract failed: {0}")]
-    Extract(String),
+    #[error("render failed: {0}")]
+    Render(String),
     #[error("print failed: {0}")]
     Print(String),
-    #[error("reprint only supported on Windows (set MPA_MOCK_PRINT_DIR for tests)")]
-    UnsupportedPlatform,
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -55,67 +53,6 @@ pub fn cleanup_spool_file(path: Option<&Path>) {
     }
 }
 
-/// Build the subset PDF with only the included pages of an entry.
-pub fn build_subset_pdf(entry: &OutboxEntry) -> Result<Vec<u8>, ReprintError> {
-    // Every supported spool format normalizes to PDF first, so subsetting
-    // and delivery stay format-agnostic. Only Unknown has no path at all.
-    match entry.format {
-        Some(
-            SpoolFormat::Pdf
-            | SpoolFormat::PostScript
-            | SpoolFormat::Xps
-            | SpoolFormat::Emf
-            | SpoolFormat::Pcl,
-        ) => {}
-        Some(f) => return Err(ReprintError::UnsupportedFormat(f)),
-        None => return Err(ReprintError::NoSpoolFile),
-    }
-    let path = entry.spool_path.as_ref().ok_or(ReprintError::NoSpoolFile)?;
-    let bytes = std::fs::read(path).map_err(|_| ReprintError::NoSpoolFile)?;
-    let wanted: Vec<u32> = entry
-        .pages
-        .iter()
-        .filter(|p| p.included)
-        .map(|p| p.page_no)
-        .collect();
-    if wanted.is_empty() {
-        return Err(ReprintError::NoSpoolFile);
-    }
-    let gs = Ghostscript::discover().map_err(|e| ReprintError::Ghostscript(e.to_string()))?;
-    let format = entry.format.unwrap_or(SpoolFormat::Unknown);
-    let pdf =
-        convert_to_pdf(&bytes, format, &gs).map_err(|e| ReprintError::Convert(e.to_string()))?;
-    extract_pages_pdf(&pdf, &wanted, &gs).map_err(|e| ReprintError::Extract(e.to_string()))
-}
-
-/// Deliver an already-built subset PDF to the original printer.
-pub fn deliver_pdf(pdf: &[u8], entry: &OutboxEntry) -> Result<(), ReprintError> {
-    #[cfg(windows)]
-    {
-        let gs = Ghostscript::discover().map_err(|e| ReprintError::Ghostscript(e.to_string()))?;
-        let dir = spool_cache_dir();
-        let file = dir.join(format!("{}-reprint.pdf", entry.idempotency_key));
-        std::fs::write(&file, pdf)?;
-        // Deliver to the role's printer when one is assigned (Fase 3), else to
-        // the printer that received the original job. Print options (Fase 4)
-        // travel with the entry so a queued job keeps its settings.
-        let target = entry.deliver_printer.as_deref().unwrap_or(&entry.printer);
-        let result = print_pdf_to_winprinter(&file, target, &gs, entry.options.as_ref())
-            .map_err(|e| ReprintError::Print(e.to_string()));
-        let _ = std::fs::remove_file(&file);
-        result
-    }
-
-    #[cfg(not(windows))]
-    {
-        let dir =
-            std::env::var("MPA_MOCK_PRINT_DIR").map_err(|_| ReprintError::UnsupportedPlatform)?;
-        let file = PathBuf::from(dir).join(format!("{}-reprint.pdf", entry.idempotency_key));
-        std::fs::write(&file, pdf).map_err(|e| ReprintError::Print(e.to_string()))?;
-        Ok(())
-    }
-}
-
 /// Outcome of one lock-free reprint sweep step (see `sweep_one_reprint`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SweepOutcome {
@@ -125,10 +62,10 @@ pub enum SweepOutcome {
 }
 
 /// Attempt a single pending reprint WITHOUT holding the core lock during
-/// Ghostscript/printer IO: the entry is cloned under a brief lock, printed
+/// rendering or printer IO: the entry is cloned under a brief lock, printed
 /// unlocked, then marked under a second brief lock. Safe to call from the
 /// watcher loop, the UI poll or the drain — the UI thread never waits on a
-/// subprocess this way.
+/// printer this way.
 pub fn sweep_one_reprint(
     core: &std::sync::Arc<std::sync::Mutex<crate::core::AgentCore>>,
 ) -> SweepOutcome {
@@ -154,12 +91,38 @@ pub fn sweep_one_reprint(
     }
 }
 
-/// Reprint the included pages of an outbox entry: extract the subset PDF,
-/// then send it to the original printer. Returns an error (leaving the
-/// entry pending) when anything is missing — never half-prints.
+/// Reprint the included pages of an outbox entry.
+///
+/// Pages are rendered to pixels and printed as raster: that is the same view
+/// the analyzer priced, and it needs no external interpreter. Print options
+/// (paper size, duplex) are not applied on this path yet — the printer keeps
+/// its own defaults and the entry still records what was asked for, so the
+/// difference stays auditable.
 pub fn attempt_reprint(entry: &OutboxEntry) -> Result<(), ReprintError> {
-    let subset = build_subset_pdf(entry)?;
-    deliver_pdf(&subset, entry)
+    let format = match entry.format {
+        Some(f @ (SpoolFormat::Pdf | SpoolFormat::Emf | SpoolFormat::Image)) => f,
+        Some(f) => return Err(ReprintError::UnsupportedFormat(f)),
+        None => return Err(ReprintError::NoSpoolFile),
+    };
+    let path = entry.spool_path.as_ref().ok_or(ReprintError::NoSpoolFile)?;
+    let bytes = std::fs::read(path).map_err(|_| ReprintError::NoSpoolFile)?;
+
+    let wanted: Vec<u32> = entry
+        .pages
+        .iter()
+        .filter(|p| p.included)
+        .map(|p| p.page_no)
+        .collect();
+    if wanted.is_empty() {
+        return Err(ReprintError::EmptySelection);
+    }
+
+    let pages = render_pages(&bytes, format, &wanted, REPRINT_DPI)
+        .map_err(|e| ReprintError::Render(e.to_string()))?;
+    // Deliver to the role's printer when one is assigned (Fase 3), else to the
+    // printer that received the original job.
+    let target = entry.deliver_printer.as_deref().unwrap_or(&entry.printer);
+    print_images(target, &pages, REPRINT_DPI).map_err(|e| ReprintError::Print(e.to_string()))
 }
 
 #[cfg(test)]
@@ -221,16 +184,37 @@ mod tests {
         cleanup_spool_file(None);
     }
 
+    /// A one-pixel PGM image is a valid spool payload, which keeps this test
+    /// free of PDF fixtures while still exercising render and delivery.
     #[cfg(not(windows))]
     #[test]
-    fn mock_deliver_drops_pdf_without_ghostscript() {
-        let dir = std::env::temp_dir().join("mpa-mock-print-test");
+    fn reprint_renders_selected_pages_and_delivers_them() {
+        let dir = std::env::temp_dir().join(format!("mpa-reprint-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::env::set_var("MPA_MOCK_PRINT_DIR", &dir);
-        let entry = entry_with_pages();
-        deliver_pdf(b"%PDF-1.4 subset", &entry).unwrap();
-        let dropped = dir.join("test-1-reprint.pdf");
-        assert_eq!(std::fs::read(&dropped).unwrap(), b"%PDF-1.4 subset");
+
+        let spool = dir.join("spool.bin");
+        std::fs::write(&spool, b"P5\n2 2\n255\n\x00\x00\x00\x00").unwrap();
+
+        let mut entry = entry_with_pages();
+        entry.format = Some(SpoolFormat::Image);
+        entry.spool_path = Some(spool);
+        entry.pages = vec![crate::core::OutboxPage {
+            page_no: 1,
+            coverage: mpa_domain::Coverage::new(0.0, 0.0, 0.0, 100.0),
+            tier_id: None,
+            included: true,
+        }];
+
+        attempt_reprint(&entry).expect("reprint");
+        let delivered = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".png"))
+            .count();
+        assert_eq!(delivered, 1, "one page, one delivered sheet");
+
         std::env::remove_var("MPA_MOCK_PRINT_DIR");
         let _ = std::fs::remove_dir_all(&dir);
     }

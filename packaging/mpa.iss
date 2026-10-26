@@ -1,7 +1,8 @@
 ; MyPaper Print Agent — classic next-next-next installer (Inno Setup 6).
 ; Built by packaging/build.ps1, which fills AppVersion from Cargo.
-; Ghostscript is NOT bundled: the agent uses an existing install
-; (MPA_GHOSTSCRIPT) or the PDF path stays disabled until it exists.
+; pdfium ships next to the binaries (fetched by packaging/fetch-pdfium.ps1):
+; BSD-3-Clause, redistributable, and pinned so measurements stay reproducible.
+; The installer verifies it is present and speaks up if it is not.
 
 #define MyAppName "MyPaper Print Agent"
 #ifndef AppVersion
@@ -34,6 +35,7 @@ Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
 [Files]
 Source: "..\target\x86_64-pc-windows-msvc\release\mpa.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\target\x86_64-pc-windows-msvc\release\mpa-ui.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\vendor\pdfium\pdfium.dll"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"
