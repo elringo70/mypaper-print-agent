@@ -663,6 +663,25 @@ Estado: `advisories ok, bans ok, licenses ok, sources ok`; Windows `fmt` limpio,
 Queda de la fase 7 sólo el **piloto en sombra** en la papelería, que necesita impresiones
 reales.
 
+### Fase 8 — captura por cola IPP propia (funcionando con Word)
+
+El callejón sin salida era el punto de captura: mirar la cola de la impresora física
+entrega PCL crudo, y medirlo necesita GhostPCL (AGPL) o licencia comercial. Se cambió el
+punto de captura a una **cola propia por IPP**: no es un driver, Windows la renderiza con
+su IPP Class Driver y, al anunciar sólo `application/pdf`, entrega el documento como PDF.
+
+- `crates/ipp`: subconjunto de IPP/2.0 que Windows usa de verdad. La secuencia real es
+  `Validate-Job` → `Create-Job` → `Send-Document`, **no** `Print-Job`.
+- Probado con un documento de Word: llegó como PDF 1.7 y midió K=4.77 % y K=1.67 %.
+- `mpa ipp --reprint <impresora>`: mide cada trabajo, imprime los números por página y
+  reimprime a esa impresora. La respuesta al cliente sale **antes** de medir, porque el
+  cliente espera sobre ella.
+- Si medir falla el trabajo igual sale: se pide el número de páginas al PDF en vez de
+  imprimir una de cincuenta.
+
+Pendiente: registrar el cobro contra MyPaper desde este flujo, y que `mpa ipp` corra como
+tarea elevada en vez de a mano.
+
 ## Primer entregable concreto
 
 Fase 1 con el test dorado corriendo sobre los 35 páginas del REA y el analizador sin
