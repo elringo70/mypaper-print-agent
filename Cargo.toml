@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/domain", "crates/spool", "crates/analyzer", "crates/agent", "crates/sync", "crates/update", "crates/cli", "crates/ui"]
+members = ["crates/domain", "crates/spool", "crates/analyzer", "crates/agent", "crates/sync", "crates/update", "crates/cli", "crates/ui", "crates/desktop"]
 exclude = ["third-party/xattr"]
 
 [patch.crates-io]

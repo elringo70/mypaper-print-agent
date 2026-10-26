@@ -1,0 +1,33 @@
+[package]
+name = "mpa-desktop"
+version = "0.3.0"
+edition = "2021"
+
+# Same window, new shell: Tauri hosts the Svelte UI, the Rust core and the
+# spool watcher stay exactly where they were. `crates/ui` (gpui) is kept as the
+# reference until this reaches feature parity.
+[[bin]]
+name = "mpa-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+mpa-domain = { path = "../domain" }
+mpa-agent = { path = "../agent" }
+mpa-spool = { path = "../spool" }
+mpa-sync = { path = "../sync" }
+mpa-update = { path = "../update" }
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+thiserror = "2"
+
+[features]
+# Tauri's custom protocol in release builds; dev uses the Vite server.
+custom-protocol = ["tauri/custom-protocol"]
+
+[lints]
+workspace = true
