@@ -430,13 +430,22 @@ pub fn save_job(dir: &Path, job: &ReceivedJob) -> Result<PathBuf, IppError> {
     Ok(path)
 }
 
-/// Read one HTTP request from a socket: request line, headers, body. Handles
-/// both Content-Length and chunked bodies, because the Windows IPP client uses
-/// whichever it prefers for a given job size.
-pub fn read_http_request(stream: &mut TcpStream) -> Result<Vec<u8>, IppError> {
+/// One HTTP request, decoded.
+#[derive(Debug)]
+pub struct HttpRequest {
+    pub method: String,
+    pub path: String,
+    pub body: Vec<u8>,
+}
+
+/// Read one HTTP request: request line, headers, body.
+///
+/// Two things the Windows client does that a naive reader misses: it sends
+/// `Expect: 100-continue` and waits for the interim response before writing the
+/// body (without it the connection just stalls), and it may use a chunked body.
+pub fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, IppError> {
     let mut raw = Vec::new();
     let mut buf = [0u8; 8192];
-    // Read until the end of the headers.
     let header_end = loop {
         let n = stream.read(&mut buf)?;
         if n == 0 {
@@ -451,18 +460,30 @@ pub fn read_http_request(stream: &mut TcpStream) -> Result<Vec<u8>, IppError> {
         }
     };
 
-    let head = String::from_utf8_lossy(&raw[..header_end]).to_ascii_lowercase();
-    let chunked = head.contains("transfer-encoding: chunked");
-    let content_length = head
+    let head = String::from_utf8_lossy(&raw[..header_end]).to_string();
+    let mut lines = head.lines();
+    let request_line = lines.next().unwrap_or_default();
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or_default().to_string();
+    let path = parts.next().unwrap_or("/").to_string();
+
+    let lowered = head.to_ascii_lowercase();
+    let chunked = lowered.contains("transfer-encoding: chunked");
+    let expects_continue = lowered.contains("expect: 100-continue");
+    let content_length = lowered
         .lines()
         .find_map(|line| line.strip_prefix("content-length:"))
         .and_then(|v| v.trim().parse::<usize>().ok());
 
+    if expects_continue {
+        // The client is holding the body until this arrives.
+        stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n")?;
+        stream.flush()?;
+    }
+
     let mut body = raw[header_end..].to_vec();
 
     if chunked {
-        // Decode into a separate buffer: draining the chunks out of `body` used
-        // to leave nothing to return.
         let mut decoded = Vec::new();
         loop {
             while !body.contains(&b'\n') {
@@ -494,7 +515,6 @@ pub fn read_http_request(stream: &mut TcpStream) -> Result<Vec<u8>, IppError> {
             }
             decoded.extend_from_slice(&body[consumed..consumed + size]);
 
-            // The chunk's trailing CRLF belongs to the framing, not the data.
             let mut drop_to = consumed + size;
             while body.len() < drop_to + 2 {
                 let n = stream.read(&mut buf)?;
@@ -508,7 +528,11 @@ pub fn read_http_request(stream: &mut TcpStream) -> Result<Vec<u8>, IppError> {
             }
             body.drain(..drop_to);
         }
-        return Ok(decoded);
+        return Ok(HttpRequest {
+            method,
+            path,
+            body: decoded,
+        });
     }
 
     match content_length {
@@ -521,8 +545,13 @@ pub fn read_http_request(stream: &mut TcpStream) -> Result<Vec<u8>, IppError> {
                 body.extend_from_slice(&buf[..n]);
             }
             body.truncate(len);
-            Ok(body)
+            Ok(HttpRequest { method, path, body })
         }
+        None if method == "GET" || method == "HEAD" => Ok(HttpRequest {
+            method,
+            path,
+            body: Vec::new(),
+        }),
         None => Err(IppError::Protocol("http: no content-length".into())),
     }
 }
@@ -539,25 +568,55 @@ pub fn serve(listener: TcpListener, out_dir: PathBuf, port: u16) -> Result<(), I
     let mut next_job: u32 = 1;
     for stream in listener.incoming() {
         let mut stream = stream?;
-        let body = match read_http_request(&mut stream) {
-            Ok(body) => body,
+        let request = match read_http_request(&mut stream) {
+            Ok(request) => request,
             Err(e) => {
-                eprintln!("ipp: {e}");
+                // A browser probe or a closed tab is not an error worth a stack.
+                println!("ipp: {e}");
                 continue;
             }
         };
-        let handled = handle(&body, port, next_job)?;
+
+        if request.method != "POST" {
+            // Opening the URL in a browser is the fastest way to know the
+            // endpoint is alive and reachable from this machine.
+            let text = format!(
+                "MyPaper IPP endpoint\n\nPOST {PRINT_PATH} for print jobs\ndocuments: {}\n",
+                out_dir.display()
+            );
+            write_plain(&mut stream, &text)?;
+            continue;
+        }
+
+        let handled = match handle(&request.body, port, next_job) {
+            Ok(handled) => handled,
+            Err(e) => {
+                println!("ipp: {e}");
+                continue;
+            }
+        };
+        println!(
+            "ipp: op 0x{:04x} ({} bytes) -> {}",
+            handled.operation,
+            request.body.len(),
+            if handled.job.is_some() {
+                "documento"
+            } else {
+                "sin documento"
+            }
+        );
+
         if let Some(job) = &handled.job {
             match save_job(&out_dir, job) {
                 Ok(path) => {
                     println!(
-                        "ipp: wrote {} ({} bytes)",
+                        "ipp: guardado {} ({} bytes)",
                         path.display(),
                         job.document.len()
                     );
                     next_job += 1;
                 }
-                Err(e) => eprintln!("ipp: {e}"),
+                Err(e) => println!("ipp: {e}"),
             }
         }
 
@@ -572,6 +631,18 @@ pub fn serve(listener: TcpListener, out_dir: PathBuf, port: u16) -> Result<(), I
         stream.write_all(&response)?;
         stream.flush()?;
     }
+    Ok(())
+}
+
+fn write_plain(stream: &mut TcpStream, text: &str) -> Result<(), IppError> {
+    let mut response = Vec::new();
+    response.extend_from_slice(b"HTTP/1.1 200 OK\r\n");
+    response.extend_from_slice(b"Content-Type: text/plain; charset=utf-8\r\n");
+    response.extend_from_slice(format!("Content-Length: {}\r\n", text.len()).as_bytes());
+    response.extend_from_slice(b"Connection: close\r\n\r\n");
+    response.extend_from_slice(text.as_bytes());
+    stream.write_all(&response)?;
+    stream.flush()?;
     Ok(())
 }
 
