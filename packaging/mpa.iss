@@ -44,7 +44,10 @@ AppVersion={#MyAppVersion}
 AppPublisher=MyPaper
 DefaultDirName={autopf}\MyPaperPrintAgent
 DefaultGroupName={#MyAppName}
-OutputBaseFilename=mpa-{#MyAppVersion}-setup
+#ifndef OutBase
+  #define OutBase "mpa-" + MyAppVersion + "-setup"
+#endif
+OutputBaseFilename={#OutBase}
 ; build.ps1 lee Output\mpa-<version>-setup.exe desde la raíz del repo.
 OutputDir=..\Output
 Compression=lzma2/max
@@ -89,8 +92,11 @@ Name: "autostart"; Description: "Abrir al iniciar Windows"; Flags: checkedonce
 [Run]
 Filename: "{app}\mpa.exe"; Parameters: "autostart on"; Tasks: autostart; \
   Flags: runhidden waituntilterminated
+; El binario lleva manifiesto requireAdministrator y Setup corre elevado: con
+; CreateProcess (el defecto) Windows lo rechaza con error 740. shellexec pasa por
+; ShellExecute y muestra el UAC que corresponde.
 Filename: "{app}\{#MyAppExe}"; Description: "Abrir {#MyAppName} ahora"; \
-  Flags: nowait postinstall skipifsilent
+  Flags: nowait postinstall skipifsilent shellexec
 
 [UninstallRun]
 Filename: "{app}\mpa.exe"; Parameters: "autostart off"; Flags: runhidden waituntilterminated; \
