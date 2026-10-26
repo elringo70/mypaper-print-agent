@@ -501,6 +501,42 @@ Sigue pendiente de Fase 3: límite de dispositivos por workspace, purga programa
 nonces, y que el runtime del agente entre en modo suspendido al fallar la gracia (hoy la
 verificación existe pero solo la ejecuta el comando).
 
+#### Cierre de Fase 3
+
+- `mpa_agent::gate`: motivo de bloqueo a nivel de proceso. Los dos watchers (runtime del
+  agente y el del CLI) lo consultan **antes de pausar**; un equipo bloqueado deja pasar los
+  trabajos sin gestionar. Retener una impresión ya pagada por una suscripción vencida no es
+  una opción.
+- `entitlement::apply_gate`: una sola decisión para CLI y UI, con la regla de transición
+  "sin token todavía = sigue funcionando" para no dejar muerta una instalación anterior;
+  cualquier otro fallo bloquea.
+- POS: tope de **3 equipos activos** por workspace (con el mensaje que dice cómo revocar) y
+  purga de nonces caducados en el barrido horario existente.
+- 4 tests de integración sobre archivos de token reales: válido, caducado, ausente y reloj
+  atrasado.
+
+#### Verificación real en Windows
+
+`C:\mypaper-print-agent` es un espejo del proyecto con toolchain MSVC propio
+(`/mnt/c/Users/Luis Alvarez/.cargo/bin/cargo.exe`). Se sincroniza el árbol y se compila
+**nativo**, que es la única forma de ejercitar spooler, GDI y el playback EMF:
+
+```bash
+rsync -a --exclude '.git' --exclude 'target' --exclude 'vendor' \
+  ~/documents/proyects/mypaper-print-agent/ /mnt/c/mypaper-print-agent/
+cd /mnt/c/mypaper-print-agent && "/mnt/c/Users/Luis Alvarez/.cargo/bin/cargo.exe" check --workspace
+```
+
+Resultado de esta pasada: **workspace completo compila, incluido gpui**; **147 tests
+pasan**; `clippy -D warnings` limpio salvo avisos preexistentes en `mpa-ui`. El único target
+que no arranca es el binario de test de `mpa-ui`, que exige elevación (error 740) — es el
+fallo preexistente ya documentado en el README.
+
+Esa pasada encontró dos errores que el build de Linux no podía ver (`crates/ui/src/main.rs`
+y `crates/ui/tests/ui_flow.rs` construían `WatchedPage` sin el campo nuevo) y dos lints que
+el clippy de Windows 1.99 marca y el de Linux 1.92 no. Es la razón para correr siempre el
+espejo antes de dar una fase por cerrada.
+
 ## Primer entregable concreto
 
 Fase 1 con el test dorado corriendo sobre los 35 páginas del REA y el analizador sin
