@@ -480,6 +480,27 @@ Pendiente de Fase 3:
 - Limpieza programada de `print_agent_nonces` (el índice ya existe; falta engancharla al
   cron de mantenimiento).
 
+#### Segunda mitad de Fase 3 — gracia offline (hecha)
+
+- Servidor: `GET /api/agent/entitlement` emite un token Ed25519 firmado con
+  `exp = min(ahora + 72 h, fin del periodo pagado)`; sin PREMIUM no emite. La ventana la
+  fija el servidor y **no se renueva desde el equipo**: al cancelar, el último token
+  simplemente vence.
+- Agente: `verify_with_public` (llave compilada con `option_env!`, override por
+  `MPA_ENTITLEMENT_PUBKEY`) y `ClockGuard`, un máximo visto del reloj que bloquea si el
+  sistema retrocede más de 5 minutos.
+- CLI: `mpa entitlement` renueva y guarda; `mpa entitlement --status` verifica el token
+  local sin red.
+- Los tokens de prueba los emite **la implementación TypeScript**, así que cada suite
+  verifica el formato del otro lado, no el suyo.
+
+Probado de punta a punta por CLI: token válido → `ok, 57505 h restantes`; reloj retrasado
+→ `bloqueado: clock rollback`; token caducado → `bloqueado: token expired`.
+
+Sigue pendiente de Fase 3: límite de dispositivos por workspace, purga programada de
+nonces, y que el runtime del agente entre en modo suspendido al fallar la gracia (hoy la
+verificación existe pero solo la ejecuta el comando).
+
 ## Primer entregable concreto
 
 Fase 1 con el test dorado corriendo sobre los 35 páginas del REA y el analizador sin
