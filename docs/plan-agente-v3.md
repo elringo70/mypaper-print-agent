@@ -151,6 +151,22 @@ segundo clic ya no puede encolar otra impresión.
 Aceptación: en una VM limpia, tres clics y luego imprimir desde Word funciona sin tocar
 PowerShell.
 
+**Hecha (pendiente de la prueba en VM).** El asistente gana una página con dos listas
+desplegables tomadas de las impresoras que Windows ya tiene: cuál es B/N y cuál color; por
+defecto las dos primeras, que es como suele estar montada una papelería.
+
+`packaging/setup-agent.ps1` hace el resto y es idempotente: guarda los roles con
+`mpa printers set`, arranca el agente si no corre, espera a que el endpoint conteste, crea
+la cola `MyPaper` con el IPP Class Driver y comprueba que quedó. Corre en `ssPostInstall`
+y **su código de salida se mira**: si la cola no apareció, el asistente lo dice en vez de
+dejar un agente que no captura nada.
+
+Verificado en el espejo: el script guardó B/N = KONICA, encontró el endpoint en 8631, vio
+la cola existente y salió con 0. ISCC compila la página nueva (11.8 s).
+
+Falta: instalación real en una VM limpia con dos impresoras (una de ellas de color), y
+descargar el runtime offline de WebView2 para el paquete definitivo.
+
 ### F5 — Retirar el camino viejo
 
 - El watcher de spool y la pausa de trabajos salen del flujo principal.
