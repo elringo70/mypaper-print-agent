@@ -1,4 +1,5 @@
 pub mod audit;
+pub mod billing;
 pub mod cache;
 pub mod config;
 pub mod core;

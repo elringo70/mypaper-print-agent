@@ -1474,6 +1474,16 @@ fn ipp_job(job: &mpa_ipp::ReceivedJob, path: &std::path::Path, reprint_to: Optio
     println!("ipp: {} -> {}", job.name, path.display());
     match mpa_analyzer::analyze_bytes(&job.document) {
         Ok(analysis) => {
+            // Same draft shape the spool watcher sends, so a document bills the
+            // same either way.
+            let captured = mpa_agent::billing::CapturedJob {
+                printer: "MyPaper",
+                color_mode: job.color_mode.as_deref(),
+                idempotency_key: mpa_agent::billing::idempotency_for(&job.document),
+                deliver_printer: reprint_to.map(|p| p.to_string()),
+            };
+            register(&captured, &analysis);
+
             let mut pages = Vec::new();
             for page in &analysis.pages {
                 let c = &page.coverage;
@@ -1503,6 +1513,35 @@ fn ipp_job(job: &mpa_ipp::ReceivedJob, path: &std::path::Path, reprint_to: Optio
                 reprint(&job.document, mpa_analyzer::SpoolFormat::Pdf, &all, printer);
             }
         }
+    }
+}
+
+/// Send the draft to MyPaper. Not being paired is not an error: the job still
+/// gets measured and printed, and the operator can register it later — but the
+/// console says so plainly instead of pretending it was charged.
+fn register(captured: &mpa_agent::billing::CapturedJob<'_>, analysis: &mpa_analyzer::JobAnalysis) {
+    let pairing = match PairingStore::load(None) {
+        Ok(pairing) => pairing,
+        Err(_) => {
+            println!("ipp: sin emparejar; el trabajo NO se registró en MyPaper");
+            return;
+        }
+    };
+    let entry = mpa_agent::billing::draft_for(captured, analysis);
+    let client = match SyncClient::new(&pairing.server_url, Some(pairing.agent_key)) {
+        Ok(client) => client,
+        Err(e) => {
+            println!("ipp: cliente sin configurar: {e}");
+            return;
+        }
+    };
+    match client.post_job(&entry) {
+        Ok(id) => println!(
+            "ipp: registrado en MyPaper, borrador {id} ({} página/s, idempotencia {})",
+            entry.pages.len(),
+            entry.idempotency_key
+        ),
+        Err(e) => println!("ipp: no se pudo registrar en MyPaper: {e}"),
     }
 }
 
