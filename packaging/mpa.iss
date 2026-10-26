@@ -30,6 +30,13 @@
 ; el paquete se genera igual y la comprobación avisa en vez de fallar.
 #define WebView2Offline "..\vendor\webview2\MicrosoftEdgeWebview2RuntimeInstallerX64.exe"
 
+; Sin pdfium no hay análisis de PDF. Se comprueba aquí, al compilar, y no al
+; instalar: en tiempo de instalación el DLL viaja dentro del paquete y no está
+; al lado del setup, así que mirar ahí daba un falso "paquete incompleto".
+#if !FileExists(AddBackslash(SourcePath) + "..\vendor\pdfium\pdfium.dll")
+  #pragma error "falta vendor\pdfium\pdfium.dll: ejecuta packaging\fetch-pdfium.ps1"
+#endif
+
 [Setup]
 AppId={#MyAppId}
 AppName={#MyAppName}
@@ -102,19 +109,6 @@ begin
     RegQueryStringValue(HKLM64, 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\' + WEBVIEW2_CLIENT, 'pv', Version) or
     RegQueryStringValue(HKLM, 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\' + WEBVIEW2_CLIENT, 'pv', Version) or
     RegQueryStringValue(HKCU, 'Software\Microsoft\EdgeUpdate\Clients\' + WEBVIEW2_CLIENT, 'pv', Version);
-end;
-
-function InitializeSetup: Boolean;
-begin
-  Result := True;
-  { El paquete se genera con pdfium.dll al lado; si falta, el instalador
-    quedaría "correcto" y el agente sin poder analizar nada. }
-  if not FileExists(ExpandConstant('{src}\pdfium.dll')) then
-  begin
-    MsgBox('El paquete está incompleto: falta pdfium.dll.' + #13#10 +
-           'Vuelve a generarlo con packaging\build.ps1.', mbError, MB_OK);
-    Result := False;
-  end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
