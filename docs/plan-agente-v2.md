@@ -452,6 +452,34 @@ Riesgo de este incremento: **ninguno de los ítems altos**. Cambia la medición 
 (contrato interno, no publicado) y añade un campo opcional; no toca datos persistidos,
 seguridad, contratos externos ni concurrencia. `Risk: none`.
 
+### Fase 3 — binding agente ↔ MyPaper (primera mitad)
+
+Hecho y verificado:
+
+- Agente: `DeviceKey` (Ed25519) generado al emparejar, secreto guardado junto a la clave en
+  `agent.json`, firma por petición con `x-mpa-ts` / `x-mpa-nonce` / `x-mpa-sig`.
+- Cadena canónica `METHOD\npath\nts\nnonce\nsha256(body)`, con un **vector de prueba
+  compartido** entre Rust y TypeScript: si alguien la cambia en un lado, fallan los dos.
+- Servidor: verifica la firma con `node:crypto`, ventana de 120 s y **nonce de un solo uso**
+  (índice único `(agent_id, nonce)`: es el insert el que decide un replay, así dos copias
+  simultáneas no pueden ganar las dos).
+- Emparejamientos anteriores (sin llave pública) siguen funcionando con Bearer: cero
+  ruptura para instalaciones existentes.
+- El gate PREMIUM ya existía en todos los endpoints con valor (`jobs`, `quote`, `tiers`,
+  `open-tickets`, `heartbeat`) y sigue siendo la única autoridad: el agente no decide nada.
+
+Verificación: 7 tests nuevos en Rust, 8 en TS (firma honesta, cuerpo/ruta/sello/nonce
+alterados, firma ajena, llave mal formada, ventana de reloj, query en la ruta).
+
+Pendiente de Fase 3:
+
+- Token de entitlement con caducidad absoluta (72 h) y anti-retroceso de reloj; hoy el
+  agente depende de la respuesta por petición, que es correcta pero no permite operar
+  sin red.
+- Límite de dispositivos por workspace (hoy solo revocación por `revoked_at`).
+- Limpieza programada de `print_agent_nonces` (el índice ya existe; falta engancharla al
+  cron de mantenimiento).
+
 ## Primer entregable concreto
 
 Fase 1 con el test dorado corriendo sobre los 35 páginas del REA y el analizador sin
