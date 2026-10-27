@@ -206,7 +206,11 @@ mod tests {
                 }),
             },
         ];
-        assert_eq!(printable_pages(&entry), vec![1], "blank and unchecked stay out");
+        assert_eq!(
+            printable_pages(&entry),
+            vec![1],
+            "blank and unchecked stay out"
+        );
     }
 
     #[test]

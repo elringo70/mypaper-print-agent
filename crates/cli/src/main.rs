@@ -1289,12 +1289,15 @@ fn autostart_command(action: AutostartAction) -> Result<(), AppError> {
     /// Value written by older builds; removed so it cannot double-start the UI.
     const LEGACY_RUN_VALUE: &str = "MyPaperPrintAgent";
 
+    // The Tauri window, not the retired gpui shell: pointing the task at a
+    // binary that no longer ships is how a logon autostart silently stops.
     let mut ui = std::env::current_exe()?;
-    ui.set_file_name("mpa-ui.exe");
+    ui.set_file_name("mpa-desktop.exe");
     let ui = ui.to_string_lossy().into_owned();
     // schtasks parses its own command line: a path with spaces must be quoted
-    // inside the /TR value.
-    let quoted = format!("\"{ui}\"");
+    // inside the /TR value. `--minimized` starts it in the tray: at logon the
+    // operator wants the agent running, not a window on top of everything.
+    let quoted = format!("\"{ui}\" --minimized");
 
     match action {
         AutostartAction::Status => {

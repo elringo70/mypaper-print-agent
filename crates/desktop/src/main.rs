@@ -183,6 +183,13 @@ fn main() {
         ])
         .setup(|app| {
             build_tray(app)?;
+            // Started by the logon task with --minimized: the agent captures
+            // from the tray without covering the screen.
+            if std::env::args().any(|arg| arg == "--minimized") {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -191,6 +198,14 @@ fn main() {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 let _ = window.hide();
+            }
+            // Minimising goes to the tray too: the window is the operator's view
+            // of the agent, never the agent itself. Windows reports a minimised
+            // window as 0x0.
+            if let tauri::WindowEvent::Resized(size) = event {
+                if size.width == 0 && size.height == 0 {
+                    let _ = window.hide();
+                }
             }
         })
         .run(tauri::generate_context!())
