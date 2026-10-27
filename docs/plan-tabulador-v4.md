@@ -134,6 +134,14 @@ conserva el precio con el que se cobró.
 Aceptación: quitar una página del payload produce 409 y el trabajo queda sin confirmar,
 visible en la ventana en vez de cobrado a medias.
 
+**Hecha.** El payload lleva `pageCount` y `sha256` del documento. El servidor rechaza el
+trabajo si llegan menos páginas de las declaradas, nombrando ambos números. El agente sólo
+marca la entrada como enviada cuando la respuesta trae el mismo `pageCount`; si el servidor
+es viejo y no lo trae, acepta el envío pero no puede afirmar confirmación.
+
+Tests: «Llegaron 2 de 6 páginas» en el POS; y un servidor que cotiza 1 de 2 deja la entrada
+sin sincronizar con el motivo escrito.
+
 ### F7 — "Análisis recibidos" y limpieza
 
 - Renombrar la sección y añadir columnas: código corto de idempotencia, modo y si está
