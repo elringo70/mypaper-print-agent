@@ -101,6 +101,15 @@ inexistente sale 9 («no está instalada»).
 Aceptación: cerrar con la X deja el proceso vivo y capturando; Salir desde la bandeja
 termina el proceso.
 
+**Hecha, y encontró un fallo serio.** La tarea de inicio apuntaba a **`mpa-ui.exe`**, el
+shell de gpui retirado: en una instalación nueva habría arrancado un binario que ya no
+existe, y el agente se vería instalado sin correr nunca. Ahora apunta a `mpa-desktop.exe` y
+pasa `--minimized`.
+
+Cerrar y minimizar ocultan la ventana a la bandeja (Windows reporta una ventana minimizada
+como 0×0). El proceso sigue capturando; sólo «Salir» del menú de la bandeja lo termina.
+Verificado: desktop compila en Windows y el instalador compila (12.2 s).
+
 ### F5 — Recargo por tamaño de papel
 
 - Tabla `print_media_surcharge` (workspace, media IPP, porcentaje). Semilla: carta 0 %,
