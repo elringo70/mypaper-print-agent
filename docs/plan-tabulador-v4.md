@@ -159,6 +159,17 @@ sin sincronizar con el motivo escrito.
 
 Aceptación: un trabajo que falló al registrarse se distingue de uno que nunca llegó.
 
+**Hecha.** La sección se llama «Análisis recibidos» y lleva modo, páginas, total, estado,
+ticket, confirmación y una referencia corta del idempotency, con filtro por estado.
+«Confirmado» significa que las líneas llegaron al ticket: un pendiente sin ticket prueba
+que la medición llegó, no que se cobró.
+
+## Plan v4 cerrado
+
+Las siete fases están hechas y verificadas con pruebas y contra la base de datos. Lo que
+falta no es código: la instalación en una VM limpia con dos impresoras, la primera impresión
+real a tamaño oficio y la semana de piloto en la papelería.
+
 ## Riesgos
 
 | Riesgo | Mitigación |
