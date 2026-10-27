@@ -209,7 +209,21 @@ struct JobBody {
     target_order_id: Option<String>,
     /// Rule set the operator chose; MyPaper prices the draft with it.
     mode: mpa_domain::PrintMode,
+    /// Páginas que el agente analizó. El servidor rechaza el trabajo si llegan
+    /// menos: un documento a medias se cobra a medias.
+    page_count: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    document_sha256: Option<String>,
     pages: Vec<JobPage>,
+}
+
+/// What the server stored, as it reports it back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PostedJob {
+    pub id: String,
+    /// Pages the server actually priced. `None` on a server that predates the
+    /// echo: the agent then accepts the push but cannot claim confirmation.
+    pub page_count: Option<i32>,
 }
 
 /// One page as the quote endpoint expects it.
@@ -484,9 +498,11 @@ impl SyncClient {
 
     /// Push one outbox entry. The server is idempotent on the key and prices
     /// authoritatively; the returned id is stored for reconciliation.
-    pub fn post_job(&self, entry: &OutboxEntry) -> Result<String, SyncError> {
+    pub fn post_job(&self, entry: &OutboxEntry) -> Result<PostedJob, SyncError> {
         let body = JobBody {
             idempotency_key: entry.idempotency_key.clone(),
+            page_count: entry.pages.len() as i32,
+            document_sha256: entry.document_sha256.clone(),
             target_order_id: match &entry.target {
                 TargetSelection::Ticket(id) => Some(id.clone()),
                 _ => None,
@@ -510,11 +526,16 @@ impl SyncClient {
         let bytes = serde_json::to_vec(&body).map_err(|e| SyncError::Parse(e.to_string()))?;
         let res = Self::check(self.signed("POST", "/api/agent/jobs", Some(bytes)).send()?)?;
         let value: serde_json::Value = res.json().map_err(|e| SyncError::Parse(e.to_string()))?;
-        value
+        let id = value
             .get("jobId")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
-            .ok_or_else(|| SyncError::Parse("missing jobId".into()))
+            .ok_or_else(|| SyncError::Parse("missing jobId".into()))?;
+        let page_count = value
+            .get("pageCount")
+            .and_then(|v| v.as_i64())
+            .map(|n| n as i32);
+        Ok(PostedJob { id, page_count })
     }
 
     /// Prices the analyzed pages in BOTH modes without storing anything: the

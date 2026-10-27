@@ -355,6 +355,10 @@ pub struct OutboxEntry {
     /// Failed reprint attempts so far; the sweep stops after a few.
     #[serde(default)]
     pub reprint_attempts: u8,
+    /// SHA-256 of the captured document, so what was measured can be audited
+    /// against what was printed.
+    #[serde(default)]
+    pub document_sha256: Option<String>,
     pub synced: bool,
     pub remote_id: Option<String>,
     /// Lines injected into the ticket via `materialize`. Defaults false so
@@ -1155,6 +1159,7 @@ impl AgentCore {
             applied_settings: applied,
             reprint_pending: needs_reprint,
             reprint_attempts: 0,
+            document_sha256: None,
             synced: false,
             materialized: false,
             remote_id: None,
@@ -1208,6 +1213,18 @@ impl AgentCore {
             return Err(AgentError::NoAnalysis);
         }
         let deliver_printer = self.roles.for_mode(mode).map(str::to_string);
+        // Hash del documento capturado: es lo que permite auditar después qué se
+        // midió, y lo que el servidor guarda junto al trabajo.
+        let document_sha256 =
+            spool_path
+                .as_ref()
+                .and_then(|p| std::fs::read(p).ok())
+                .map(|bytes| {
+                    use sha2::{Digest, Sha256};
+                    let mut hasher = Sha256::new();
+                    hasher.update(&bytes);
+                    hex::encode(hasher.finalize())
+                });
 
         let entry = OutboxEntry {
             idempotency_key: format!("{}-{}-{}", printer, job_id, self.version),
@@ -1232,6 +1249,7 @@ impl AgentCore {
             applied_settings: None,
             reprint_pending: true,
             reprint_attempts: 0,
+            document_sha256,
             synced: false,
             materialized: false,
             remote_id: None,

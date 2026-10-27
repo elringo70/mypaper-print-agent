@@ -106,6 +106,8 @@ fn entry() -> OutboxEntry {
         applied_settings: None,
         options: None,
         reprint_pending: false,
+        reprint_attempts: 0,
+        document_sha256: None,
         synced: false,
         remote_id: None,
         materialized: false,
@@ -146,7 +148,7 @@ fn post_job_sends_pages_with_flags_and_target() {
     let stub = Stub::start(vec![r#"{"jobId":"job-9","status":"PENDING"}"#]);
     let client = SyncClient::new(&stub.base_url, Some("k1".into())).unwrap();
     let remote = client.post_job(&entry()).unwrap();
-    assert_eq!(remote, "job-9");
+    assert_eq!(remote.id, "job-9");
     let req = stub.requests.lock().unwrap()[0].clone();
     assert!(req.contains("POST /api/agent/jobs"));
     assert!(req.contains(r#""idempotencyKey":"PC-1-42-7""#));
@@ -224,6 +226,33 @@ fn drain_pushes_and_removes_finished_entries() {
     assert_eq!(report.removed, 1);
     assert!(core.lock().unwrap().outbox().is_empty());
     assert!(report.summary().contains("1 enviados"));
+}
+
+#[test]
+fn a_job_the_server_priced_short_is_not_marked_synced() {
+    // Dos páginas medidas, una cotizada: el documento no llegó completo y no se
+    // puede dar por cobrado.
+    let stub = Stub::start(vec![
+        r#"{"jobId":"job-9","status":"PENDING","pageCount":1}"#,
+    ]);
+    let client = SyncClient::new(&stub.base_url, Some("k1".into())).unwrap();
+    let mut core = AgentCore::new(
+        Arc::new(MockSpool::new()),
+        Arc::new(MockTickets::demo()),
+        vec![],
+    );
+    core.set_outbox(vec![entry()]);
+    let core = Arc::new(Mutex::new(core));
+    let report = drain_outbox(&core, &client);
+
+    assert_eq!(report.pushed.len(), 0, "no se da por enviado");
+    assert_eq!(report.push_failed.len(), 1);
+    assert!(
+        report.push_failed[0].1.contains("1 de 2"),
+        "{:?}",
+        report.push_failed
+    );
+    assert!(!core.lock().unwrap().outbox()[0].synced);
 }
 
 #[test]

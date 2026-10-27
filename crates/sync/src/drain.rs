@@ -59,11 +59,24 @@ pub fn drain_outbox(core: &Arc<Mutex<AgentCore>>, client: &SyncClient) -> DrainR
 
         if !entry.synced {
             match client.post_job(&entry) {
-                Ok(remote_id) => {
-                    if let Ok(mut c) = core.lock() {
-                        c.mark_synced(i, remote_id.clone());
+                Ok(posted) => {
+                    // Confirmado sólo si el servidor cotizó las mismas páginas
+                    // que medimos: menos significa que el documento no llegó
+                    // completo y no se puede cobrar así.
+                    let expected = entry.pages.len() as i32;
+                    if let Some(priced) = posted.page_count {
+                        if priced != expected {
+                            report.push_failed.push((
+                                key.clone(),
+                                format!("el servidor cotizó {priced} de {expected} páginas"),
+                            ));
+                            continue;
+                        }
                     }
-                    report.pushed.push(format!("{key} -> {remote_id}"));
+                    if let Ok(mut c) = core.lock() {
+                        c.mark_synced(i, posted.id.clone());
+                    }
+                    report.pushed.push(format!("{key} -> {}", posted.id));
                 }
                 Err(e) => {
                     report.push_failed.push((key.clone(), friendly(&e)));

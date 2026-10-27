@@ -1009,6 +1009,7 @@ fn push_test_command(
         applied_settings: None,
         reprint_pending: false,
         reprint_attempts: 0,
+        document_sha256: None,
         synced: false,
         remote_id: None,
         materialized: false,
@@ -1022,7 +1023,7 @@ fn push_test_command(
         coverage.y,
         coverage.k
     );
-    let job_id = client.post_job(&entry)?;
+    let job_id = client.post_job(&entry)?.id;
     println!("ok\tdraft {job_id}\taceptado por el servidor");
     if ticket.is_some() {
         let ack = client.materialize_job(&job_id)?;
@@ -1623,8 +1624,20 @@ fn register(captured: &mpa_agent::billing::CapturedJob<'_>, analysis: &mpa_analy
         }
     };
     match client.post_job(&entry) {
-        Ok(id) => println!(
-            "ipp: registrado en MyPaper, borrador {id} ({} página/s, idempotencia {})",
+        Ok(posted)
+            if posted
+                .page_count
+                .is_some_and(|priced| priced != entry.pages.len() as i32) =>
+        {
+            println!(
+                "ipp: MyPaper cotizó {} de {} páginas: no se marca como cobrado",
+                posted.page_count.unwrap_or_default(),
+                entry.pages.len()
+            )
+        }
+        Ok(posted) => println!(
+            "ipp: registrado en MyPaper, borrador {} ({} página/s, idempotencia {})",
+            posted.id,
             entry.pages.len(),
             entry.idempotency_key
         ),

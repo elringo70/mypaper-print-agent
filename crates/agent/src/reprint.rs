@@ -164,6 +164,7 @@ mod tests {
             applied_settings: None,
             reprint_pending: true,
             reprint_attempts: 0,
+            document_sha256: None,
             synced: false,
             remote_id: None,
             materialized: false,
