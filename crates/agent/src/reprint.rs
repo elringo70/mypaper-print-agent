@@ -96,6 +96,26 @@ pub fn sweep_one_reprint(
     }
 }
 
+/// Pages that actually go on paper.
+///
+/// Included and not blank: a blank page is not printed and not charged, because
+/// the sheet the customer left empty is not something the shop produces. The
+/// following page moves up — that is what "no se imprime" means on paper.
+pub fn printable_pages(entry: &OutboxEntry) -> Vec<u32> {
+    entry
+        .pages
+        .iter()
+        .filter(|p| p.included)
+        .filter(|p| {
+            !matches!(
+                p.area.and_then(|a| a.class),
+                Some(mpa_analyzer::PageClass::Blanco)
+            )
+        })
+        .map(|p| p.page_no)
+        .collect()
+}
+
 /// Reprint the included pages of an outbox entry.
 ///
 /// Pages are rendered to pixels and printed as raster: that is the same view
@@ -112,12 +132,7 @@ pub fn attempt_reprint(entry: &OutboxEntry) -> Result<(), ReprintError> {
     let path = entry.spool_path.as_ref().ok_or(ReprintError::NoSpoolFile)?;
     let bytes = std::fs::read(path).map_err(|_| ReprintError::NoSpoolFile)?;
 
-    let wanted: Vec<u32> = entry
-        .pages
-        .iter()
-        .filter(|p| p.included)
-        .map(|p| p.page_no)
-        .collect();
+    let wanted = printable_pages(entry);
     if wanted.is_empty() {
         return Err(ReprintError::EmptySelection);
     }
@@ -153,6 +168,45 @@ mod tests {
             remote_id: None,
             materialized: false,
         }
+    }
+
+    #[test]
+    fn blank_pages_are_not_printed() {
+        use crate::core::{OutboxPage, PageArea};
+        let mut entry = entry_with_pages();
+        entry.pages = vec![
+            OutboxPage {
+                page_no: 1,
+                coverage: mpa_domain::Coverage::new(0.0, 0.0, 0.0, 10.0),
+                tier_id: None,
+                included: true,
+                area: Some(PageArea {
+                    area_pct: 5.0,
+                    class: Some(mpa_analyzer::PageClass::Mono),
+                }),
+            },
+            OutboxPage {
+                page_no: 2,
+                coverage: mpa_domain::Coverage::new(0.0, 0.0, 0.0, 0.0),
+                tier_id: None,
+                included: true,
+                area: Some(PageArea {
+                    area_pct: 0.0,
+                    class: Some(mpa_analyzer::PageClass::Blanco),
+                }),
+            },
+            OutboxPage {
+                page_no: 3,
+                coverage: mpa_domain::Coverage::new(0.0, 0.0, 0.0, 4.0),
+                tier_id: None,
+                included: false,
+                area: Some(PageArea {
+                    area_pct: 2.0,
+                    class: Some(mpa_analyzer::PageClass::Mono),
+                }),
+            },
+        ];
+        assert_eq!(printable_pages(&entry), vec![1], "blank and unchecked stay out");
     }
 
     #[test]
