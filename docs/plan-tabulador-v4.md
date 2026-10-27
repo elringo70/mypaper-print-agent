@@ -81,6 +81,15 @@ existentes.
 Aceptación: en una VM con una sola impresora, el instalador no deja terminar y dice por
 qué. Sin niveles de color, el agente no registra trabajos.
 
+**Hecha.** `setup-agent.ps1` comprueba antes de tocar nada: al menos dos impresoras, ambos
+roles elegidos, distintos y existentes, cada uno con su código de salida. El asistente
+bloquea «Siguiente» en la página de roles con las mismas dos reglas, así que el operador se
+entera ahí y no al final. En el POS, `createDraft` rechaza el trabajo si el tabulador no
+tiene ningún nivel de color activo.
+
+Verificado en el espejo: sin `-Color` sale 7 («faltan los roles»), con una impresora
+inexistente sale 9 («no está instalada»).
+
 ### F4 — Bandeja y arranque
 
 - Verificar que cerrar la ventana la oculta (no la termina) y que el proceso sigue

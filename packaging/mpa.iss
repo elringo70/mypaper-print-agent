@@ -173,6 +173,25 @@ begin
   else if ColorCombo.Items.Count = 1 then ColorCombo.ItemIndex := 0;
 end;
 
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  if CurPageID = RolesPage.ID then
+  begin
+    if (BwCombo.ItemIndex < 0) or (ColorCombo.ItemIndex < 0) then
+    begin
+      MsgBox('Elige la impresora de blanco y negro y la de color.', mbError, MB_OK);
+      Result := False;
+    end
+    else if BwCombo.Text = ColorCombo.Text then
+    begin
+      MsgBox('La misma impresora no puede ser la de blanco y negro y la de color: ' +
+             'MyPaper necesita una para cada rol.', mbError, MB_OK);
+      Result := False;
+    end;
+  end;
+end;
+
 function GetRoleParams(Param: String): String;
 begin
   Result := '';

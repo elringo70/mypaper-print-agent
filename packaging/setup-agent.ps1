@@ -50,6 +50,30 @@ $queue = 'MyPaper'
 
 function Say($text) { Write-Host "MyPaper: $text" }
 
+# --- 0. Precondiciones -------------------------------------------------------------
+# El módulo se vende como análisis de color: sin una impresora de cada rol no hay
+# nada que medir, y dejar el agente instalado a medias sólo genera trabajos que
+# nadie puede cobrar.
+$installed = @(Get-Printer -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name)
+if ($installed.Count -lt 2) {
+    Say "se necesitan al menos dos impresoras instaladas (una B/N y una de color); hay $($installed.Count)"
+    exit 6
+}
+if (-not $Bw -or -not $Color) {
+    Say 'faltan los roles: elige la impresora de blanco y negro y la de color'
+    exit 7
+}
+if ($Bw -eq $Color) {
+    Say 'la misma impresora no puede ser la de blanco y negro y la de color'
+    exit 8
+}
+foreach ($role in @($Bw, $Color)) {
+    if ($installed -notcontains $role) {
+        Say "'$role' no está instalada en este equipo"
+        exit 9
+    }
+}
+
 # --- 1. Roles ---------------------------------------------------------------------
 if ($Bw -or $Color) {
     $cliArgs = @('printers', 'set')
