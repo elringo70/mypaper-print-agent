@@ -54,6 +54,14 @@ pedidos sobre el tarifario, el instalador y la validación entre las dos aplicac
 Aceptación: crear "hasta 21" después de "hasta 5" guarda 5–21, y el producto queda
 `IMPBW21`. Un "hasta" menor o igual al anterior se rechaza con mensaje.
 
+**Hecha.** El modal captura un solo "Hasta %" y muestra debajo el rango resultante; el
+servicio calcula el piso con `ladderFloor` y el motor de precios no cambió.
+
+Migración aplicada sobre la base de desarrollo: la escalera COLOR quedó
+0–20–40–60–80–100 con códigos `IMPCL20`…`IMPCL100`. El nivel de B/N conservó su código
+`12345` porque es un SKU real del catálogo, no un código generado por el módulo — el script
+sólo reescribe códigos que empiezan por `IMP`.
+
 ### F2 — Diseño del modal igual al resto de la app
 
 - Sustituir el modal por el patrón que ya usan productos y clientes: mismo ancho, misma
