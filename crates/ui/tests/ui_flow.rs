@@ -236,6 +236,7 @@ fn adopt_analyzed_job(core: &Arc<Mutex<AgentCore>>, job_id: u32, document: &str)
         spool_path: None,
         print_mode: mpa_domain::PrintMode::Bw,
         preset: None,
+        media: None,
     });
 }
 

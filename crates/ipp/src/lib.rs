@@ -74,6 +74,9 @@ pub struct ReceivedJob {
     /// IPP `print-color-mode` as the client sent it: `color` or `monochrome`.
     /// The POS picks its rule set from this, so it must not be guessed later.
     pub color_mode: Option<String>,
+    /// IPP `media` keyword (`na_letter_8.5x11in`, `tabloid_11x17in`...). The
+    /// paper-size surcharge is applied on it.
+    pub media: Option<String>,
     pub document: Vec<u8>,
 }
 
@@ -485,12 +488,14 @@ pub fn handle_with(
                 .text("document-format")
                 .unwrap_or_else(|| "application/pdf".into());
             let color_mode = request.text("print-color-mode");
+            let media = request.text("media");
             let document = std::mem::take(&mut request.document);
             let received = (!document.is_empty()).then(|| ReceivedJob {
                 id: job_id,
                 name: name.clone(),
                 format,
                 color_mode,
+                media,
                 document,
             });
             let mut out = response_start(major, minor, STATUS_OK, request_id, &language);
@@ -1004,6 +1009,7 @@ mod tests {
             name: "../../etc/passwd".into(),
             format: "application/pdf".into(),
             color_mode: None,
+            media: None,
             document: Vec::new(),
         };
         let name = job_file_name(&job);
@@ -1021,6 +1027,7 @@ mod tests {
             name: "factura".into(),
             format: "application/pdf".into(),
             color_mode: None,
+            media: None,
             document: b"%PDF-1.7 body".to_vec(),
         };
         let path = save_job(&dir, &job).expect("saved");

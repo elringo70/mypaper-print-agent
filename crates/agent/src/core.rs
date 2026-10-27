@@ -90,6 +90,9 @@ pub struct WatchedJob {
     /// reprint path: the held job carries the driver's own settings and they
     /// cannot be changed in place.
     pub preset: Option<String>,
+    /// Sheet size the client asked for (`na_letter_8.5x11in`...). Drives the
+    /// paper-size surcharge.
+    pub media: Option<String>,
 }
 
 /// Outcome of intercepting a job (see `detect_and_pause`).
@@ -359,6 +362,9 @@ pub struct OutboxEntry {
     /// against what was printed.
     #[serde(default)]
     pub document_sha256: Option<String>,
+    /// Sheet size, for the paper-size surcharge.
+    #[serde(default)]
+    pub media: Option<String>,
     pub synced: bool,
     pub remote_id: Option<String>,
     /// Lines injected into the ticket via `materialize`. Defaults false so
@@ -847,6 +853,7 @@ impl AgentCore {
                         // Black and white is the default, per the operator spec.
                         print_mode: PrintMode::Bw,
                         preset: None,
+                        media: None,
                     },
                 );
                 self.bump();
@@ -886,11 +893,13 @@ impl AgentCore {
     /// Unlike the spool watcher there is nothing to pause: Windows handed us the
     /// document and considers it printed. The operator's authorisation is what
     /// releases it, and the PDF is already on disk, so a restart loses nothing.
+    #[allow(clippy::too_many_arguments)]
     pub fn ingest_captured(
         &mut self,
         printer: &str,
         job_id: u32,
         document: String,
+        media: Option<String>,
         data: &[u8],
         spool_path: Option<PathBuf>,
     ) -> Result<(), AgentError> {
@@ -911,6 +920,7 @@ impl AgentCore {
                 spool_path: None,
                 print_mode: PrintMode::Bw,
                 preset: None,
+                media,
             },
         );
         self.bump();
@@ -1160,6 +1170,7 @@ impl AgentCore {
             reprint_pending: needs_reprint,
             reprint_attempts: 0,
             document_sha256: None,
+            media: None,
             synced: false,
             materialized: false,
             remote_id: None,
@@ -1191,7 +1202,7 @@ impl AgentCore {
         mode: PrintMode,
         target: TargetSelection,
     ) -> Result<Completion, AgentError> {
-        let (pages, format, spool_path) = {
+        let (pages, format, spool_path, media) = {
             let job = self.job_mut(printer, job_id)?;
             if job.state != JobState::Paused {
                 // Already authorised once: printing it again would charge twice.
@@ -1202,7 +1213,12 @@ impl AgentCore {
             }
             job.print_mode = mode;
             job.target = target.clone();
-            (job.pages.clone(), job.format, job.spool_path.clone())
+            (
+                job.pages.clone(),
+                job.format,
+                job.spool_path.clone(),
+                job.media.clone(),
+            )
         };
         if !pages.iter().any(|p| p.included) {
             return Err(AgentError::NothingIncluded);
@@ -1250,6 +1266,7 @@ impl AgentCore {
             reprint_pending: true,
             reprint_attempts: 0,
             document_sha256,
+            media,
             synced: false,
             materialized: false,
             remote_id: None,

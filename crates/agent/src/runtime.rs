@@ -84,6 +84,7 @@ impl AgentRuntime {
                             CAPTURE_PRINTER,
                             watched,
                             job.name.clone(),
+                            job.media.clone(),
                             &job.document,
                             Some(path.to_path_buf()),
                         ) {
@@ -242,6 +243,7 @@ fn recover_held_jobs(
                 spool_path: None,
                 print_mode: PrintMode::Bw,
                 preset: None,
+                media: None,
             });
         }
         hold_and_analyze(core, backend, printer, job.id);

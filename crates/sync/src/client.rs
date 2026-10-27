@@ -214,6 +214,8 @@ struct JobBody {
     page_count: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
     document_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    media: Option<String>,
     pages: Vec<JobPage>,
 }
 
@@ -503,6 +505,7 @@ impl SyncClient {
             idempotency_key: entry.idempotency_key.clone(),
             page_count: entry.pages.len() as i32,
             document_sha256: entry.document_sha256.clone(),
+            media: entry.media.clone(),
             target_order_id: match &entry.target {
                 TargetSelection::Ticket(id) => Some(id.clone()),
                 _ => None,

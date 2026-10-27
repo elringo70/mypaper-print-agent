@@ -123,6 +123,7 @@ mod tests {
             reprint_pending: false,
             reprint_attempts: 0,
             document_sha256: None,
+            media: None,
             synced: true,
             remote_id: Some("job-1".into()),
             materialized: true,

@@ -101,6 +101,7 @@ fn core_with_paused_job(format: Option<SpoolFormat>) -> (Arc<Mutex<AgentCore>>, 
         spool_path: None,
         print_mode: PrintMode::Bw,
         preset: None,
+        media: None,
     });
     (Arc::new(Mutex::new(core)), backend)
 }
@@ -269,6 +270,7 @@ fn core_with_devmode_job(
         spool_path: None,
         print_mode: PrintMode::Bw,
         preset: None,
+        media: None,
     });
     (Arc::new(Mutex::new(core)), backend)
 }

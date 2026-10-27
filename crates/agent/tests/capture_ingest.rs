@@ -182,6 +182,7 @@ fn authorising_queues_the_print_and_releases_the_job() {
             mpa_agent::CAPTURE_PRINTER,
             1,
             "cotizacion.png".into(),
+            None,
             document,
             Some(path),
         )
@@ -323,6 +324,7 @@ fn one_authorisation_prints_once() {
         reprint_pending: true,
         reprint_attempts: 0,
         document_sha256: None,
+        media: None,
         synced: false,
         remote_id: None,
         materialized: false,

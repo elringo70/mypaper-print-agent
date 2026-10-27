@@ -114,6 +114,7 @@ fn core_with_paused_job(
         spool_path: None,
         print_mode: PrintMode::Bw,
         preset: None,
+        media: None,
     });
     (Arc::new(Mutex::new(core)), backend)
 }

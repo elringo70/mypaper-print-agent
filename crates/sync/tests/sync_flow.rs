@@ -108,6 +108,7 @@ fn entry() -> OutboxEntry {
         reprint_pending: false,
         reprint_attempts: 0,
         document_sha256: None,
+        media: None,
         synced: false,
         remote_id: None,
         materialized: false,
