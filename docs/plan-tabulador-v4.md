@@ -122,6 +122,15 @@ Verificado: desktop compila en Windows y el instalador compila (12.2 s).
 Aceptación: la misma página a oficio cuesta 10 % más que a carta, y la línea guardada
 conserva el precio con el que se cobró.
 
+**Hecha.** Tabla `print_media_surcharge` (workspace, media, porcentaje) con migración
+aplicada; sin fila, el tamaño vale lo mismo que carta. El agente ya transporta el `media`
+de IPP desde el trabajo hasta el payload. El POS aplica el porcentaje al precio de cada
+página y guarda el resultado en `unit_price`, así que cambiar el porcentaje mañana no
+reescribe una factura de ayer. La página de niveles tiene el editor de A4, oficio, doble
+carta/tabloide y ejecutivo.
+
+Verificado contra la base: con oficio al 10 %, una página de $4.50 se cobró $4.95.
+
 ### F6 — Validación de documento completo
 
 - El payload del trabajo lleva `pageCount` declarado y `sha256` del documento.
