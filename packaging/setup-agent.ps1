@@ -85,8 +85,29 @@ if ($Bw -or $Color) {
 }
 
 # --- 2. The agent must be answering before the queue is created --------------------
-$running = Get-Process -Name 'mpa-desktop' -ErrorAction SilentlyContinue
-if (-not $running) {
+# Answering on the port is what proves capture works; a running window proves
+# nothing, because a second instance starts capture-less and the operator closes
+# whichever window looks redundant. Reuse a listening agent, replace a silent one.
+function Test-AgentPort {
+    try {
+        $client = New-Object Net.Sockets.TcpClient
+        $client.Connect('127.0.0.1', $Port)
+        $client.Close()
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+$running = @(Get-Process -Name 'mpa-desktop' -ErrorAction SilentlyContinue)
+if (Test-AgentPort) {
+    Say "el agente ya responde en 127.0.0.1:$Port"
+} elseif ($running.Count -gt 0) {
+    Say 'el agente corre pero no escucha; reiniciándolo'
+    $running | Stop-Process -Force
+    Start-Sleep -Seconds 2
+    Start-Process -FilePath $desktop -WindowStyle Minimized | Out-Null
+} else {
     Say 'iniciando el agente'
     Start-Process -FilePath $desktop -WindowStyle Minimized | Out-Null
 }

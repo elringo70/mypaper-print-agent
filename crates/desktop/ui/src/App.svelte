@@ -17,6 +17,21 @@
 	// Polling a version stamp is enough: the core bumps it on every change and
 	// the snapshot is a few kilobytes, so there is no event stream to desync.
 	let seen = -1;
+
+	/** Read the core once, now. Mutations call this instead of waiting up to a
+	 *  second for the poll, which is what made every click feel late. */
+	async function refreshSnapshot() {
+		try {
+			const next = await api.snapshot();
+			if (next.version !== seen) {
+				seen = next.version;
+				snapshot = next;
+			}
+		} catch (e) {
+			error = String(e);
+		}
+	}
+
 	$effect(() => {
 		let alive = true;
 		const tick = async () => {
@@ -40,9 +55,15 @@
 
 	async function toggle(job: JobDto, pageNo: number, included: boolean) {
 		error = null;
+		// The checkbox has to move on click: waiting for the next poll made
+		// deselecting a page look broken.
+		const page = job.pages.find((p) => p.pageNo === pageNo);
+		if (page) page.included = included;
 		try {
 			await api.togglePage(job.printer, job.jobId, pageNo, included);
+			await refreshSnapshot();
 		} catch (e) {
+			if (page) page.included = !included;
 			error = String(e);
 		}
 	}
@@ -53,7 +74,7 @@
 		try {
 			if (action === 'complete') await api.complete(job.printer, job.jobId);
 			else await api.cancel(job.printer, job.jobId);
-			seen = -1;
+			await refreshSnapshot();
 		} catch (e) {
 			error = String(e);
 		} finally {
@@ -65,7 +86,7 @@
 		error = null;
 		try {
 			await api.selectTarget(job.printer, job.jobId, kind, ticketId ?? null);
-			seen = -1;
+			await refreshSnapshot();
 		} catch (e) {
 			error = String(e);
 		}
@@ -75,7 +96,7 @@
 		error = null;
 		try {
 			await api.setPreset(job.printer, job.jobId, preset || null);
-			seen = -1;
+			await refreshSnapshot();
 		} catch (e) {
 			error = String(e);
 		}
@@ -83,51 +104,54 @@
 
 	async function setMode(job: JobDto, mode: 'Bw' | 'Color') {
 		error = null;
+		const previous = job.printMode;
+		job.printMode = mode;
 		try {
 			await api.setPrintMode(job.printer, job.jobId, mode);
-			seen = -1;
+			await refreshSnapshot();
 		} catch (e) {
+			job.printMode = previous;
 			error = String(e);
 		}
 	}
 
 	/**
-	 * Price per job and rule set, keyed by the snapshot version so any change
-	 * (mode, pages) refetches instead of showing a stale total. The number
-	 * always comes from the server: a local guess would drift from the ticket.
+	 * Price per job, keyed by job only: keeping the snapshot version out of the
+	 * key means a refetch never blanks the total — the last number stays on
+	 * screen until the new one lands, instead of flashing "sin precio" on every
+	 * click. The number always comes from the server.
 	 */
 	let quotes = $state<Record<string, QuoteDto>>({});
 	let quoteError = $state<string | null>(null);
 
-	function quoteKey(job: JobDto) {
-		return `${job.printer}#${job.jobId}#${snapshot?.version ?? 0}`;
+	function jobKey(job: JobDto) {
+		return `${job.printer}#${job.jobId}`;
 	}
 
 	async function refreshQuote(job: JobDto) {
-		const key = quoteKey(job);
-		if (quotes[key]) return;
 		try {
-			const q = await api.quote(job.printer, job.jobId);
-			quotes = { ...quotes, [key]: q };
+			quotes[jobKey(job)] = await api.quote(job.printer, job.jobId);
 			quoteError = null;
 		} catch (e) {
 			quoteError = String(e);
 		}
 	}
 
+	let quoteTimer: ReturnType<typeof setTimeout> | undefined;
+
 	$effect(() => {
 		const job = current;
-		if (job && job.pages.length > 0) {
-			refreshQuote(job);
-			const base = `${job.printer}#${job.jobId}#`;
-			for (const k of Object.keys(quotes)) {
-				if (k.startsWith(base) && k !== quoteKey(job)) delete quotes[k];
-			}
-		}
+		// Any change reprices, but the burst is coalesced: one HTTP round trip
+		// per click is what made mode and page toggles crawl.
+		snapshot?.version;
+		if (!job || job.pages.length === 0) return;
+		clearTimeout(quoteTimer);
+		quoteTimer = setTimeout(() => refreshQuote(job), 150);
+		return () => clearTimeout(quoteTimer);
 	});
 
 	function quote(job: JobDto) {
-		return quotes[quoteKey(job)] ?? null;
+		return quotes[jobKey(job)] ?? null;
 	}
 
 	function modeTotal(job: JobDto) {
@@ -144,10 +168,19 @@
 	}
 
 	async function selectAll(job: JobDto, on: boolean) {
-		for (const page of job.pages) {
-			if (page.included !== on) await toggle(job, page.pageNo, on);
+		const touched = job.pages.filter((page) => page.included !== on);
+		if (touched.length === 0) return;
+		// One round trip per page, in parallel, and a single refresh at the end:
+		// awaiting each call in sequence is what made "seleccionar todas" crawl.
+		for (const page of touched) page.included = on;
+		try {
+			await Promise.all(
+				touched.map((page) => api.togglePage(job.printer, job.jobId, page.pageNo, on))
+			);
+		} catch (e) {
+			error = String(e);
 		}
-		seen = -1;
+		await refreshSnapshot();
 	}
 
 	/** Page whose preview fills the right column: the first included one. */

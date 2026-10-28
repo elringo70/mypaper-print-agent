@@ -1325,7 +1325,12 @@ impl AgentCore {
     }
 
     pub fn cancel_job(&mut self, printer: &str, job_id: u32) -> Result<(), AgentError> {
-        self.backend.cancel_job(printer, job_id)?;
+        // A captured job never reached the spooler: the document arrived over
+        // HTTP, so asking the spooler to cancel it fails with
+        // "<printer>: job N not found". Only really-spooled jobs need the backend.
+        if printer != crate::CAPTURE_PRINTER {
+            self.backend.cancel_job(printer, job_id)?;
+        }
         let job = self.job_mut(printer, job_id)?;
         job.state = transition(job.state, JobEvent::Cancelled).expect("paused cancels legally");
         cleanup_spool_file(job.spool_path.as_deref());

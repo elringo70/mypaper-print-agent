@@ -59,10 +59,18 @@ if (-not (Test-Path (Join-Path $ui "dist\index.html"))) {
 }
 
 # --- Rust -------------------------------------------------------------------------
+# mpa-ui is retired: mpa-desktop replaced it and the installer deletes the old
+# mpa-ui.exe. The crate no longer compiles against mpa-agent and nothing depends
+# on it, so it is excluded here the same way docs/plan-agente-v2.md excludes it.
+#
+# mpa-desktop's own test binaries carry its requireAdministrator manifest, so
+# running them from a non-elevated shell fails with "os error 740" (the same
+# reason the docs exclude it on Linux). Clippy still compiles every target,
+# including that one; only execution is skipped here.
 if (-not $SkipTests) {
-    cargo test --workspace --locked
+    cargo test --workspace --exclude mpa-ui --exclude mpa-desktop --locked
     if ($LASTEXITCODE -ne 0) { exit 1 }
-    cargo clippy --workspace --all-targets --locked -- -D warnings
+    cargo clippy --workspace --exclude mpa-ui --all-targets --locked -- -D warnings
     if ($LASTEXITCODE -ne 0) { exit 1 }
 }
 

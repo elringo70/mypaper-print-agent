@@ -151,7 +151,7 @@ mod tests {
     fn the_area_measurement_survives_to_the_draft() {
         // Half the sheet inked: AREA ladders bill on exactly this number.
         let mut pixels = vec![255u8; 2 * 2 * 4];
-        for px in pixels.chunks_exact_mut(4).take(2) {
+        for px in pixels.as_chunks_mut::<4>().0.iter_mut().take(2) {
             px[0] = 0;
             px[1] = 0;
             px[2] = 0;

@@ -153,6 +153,17 @@ fn main() {
                 ));
             }
         }
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            // One capture endpoint per machine. A second launch — the installer
+            // opens the window and setup-agent.ps1 also starts the agent — used
+            // to run capture-less and leave two identical windows on screen;
+            // closing the wrong one silently killed billing for every job.
+            mpa_agent::log::info(format!(
+                "ya hay una instancia escuchando en el puerto {}; salgo",
+                mpa_ipp::DEFAULT_PORT
+            ));
+            return;
+        }
         Err(e) => mpa_agent::log::warn(format!(
             "puerto {} ocupado, sin captura IPP: {e}",
             mpa_ipp::DEFAULT_PORT
@@ -160,6 +171,7 @@ fn main() {
     }
 
     spawn_ticket_refresh(Arc::clone(&core));
+    spawn_tier_refresh(Arc::clone(&core), state_path.clone());
     mpa_agent::log::info(format!(
         "starting mpa-desktop v{}",
         env!("CARGO_PKG_VERSION")
@@ -247,15 +259,52 @@ fn build_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 /// never wait on an HTTP call.
 fn spawn_ticket_refresh(core: Arc<Mutex<AgentCore>>) {
     std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(30));
+        // Fetch first: sleeping before the first call left the destination
+        // picker empty for the first half minute, which reads as "no sync".
         let source = match core.lock() {
             Ok(core) => core.ticket_source(),
-            Err(_) => continue,
+            Err(_) => {
+                std::thread::sleep(Duration::from_secs(30));
+                continue;
+            }
         };
-        if let Ok(tickets) = source.list_open_tickets() {
-            if let Ok(mut core) = core.lock() {
-                core.set_cached_tickets(tickets);
+        match source.list_open_tickets() {
+            Ok(tickets) => {
+                if let Ok(mut core) = core.lock() {
+                    core.set_cached_tickets(tickets);
+                }
+            }
+            Err(e) => mpa_agent::log::warn(format!("tickets: {e}")),
+        }
+        std::thread::sleep(Duration::from_secs(30));
+    });
+}
+
+/// Pull the tariff ladder, metrics and rule set the POS prices with.
+///
+/// Without this the agent kept whatever `mpa tiers sync` last wrote — a manual
+/// command nobody runs after editing the tabulador — so the window showed a
+/// range and a price the ticket would never charge.
+fn spawn_tier_refresh(core: Arc<Mutex<AgentCore>>, state_path: std::path::PathBuf) {
+    std::thread::spawn(move || loop {
+        if let Ok(pairing) = PairingStore::load(None) {
+            if let Ok(client) = SyncClient::new(&pairing.server_url, Some(pairing.agent_key)) {
+                match client.get_tiers_sync() {
+                    Ok(sync) => {
+                        let count = sync.tiers.len();
+                        if let Ok(mut core) = core.lock() {
+                            core.set_tiers(sync.tiers);
+                            core.set_metrics(sync.metrics);
+                            core.set_pricing(sync.pricing);
+                            core.set_tier_prices(sync.prices);
+                            let _ = save_to(&core, &state_path);
+                        }
+                        mpa_agent::log::info(format!("tarifas del servidor: {count} niveles"));
+                    }
+                    Err(e) => mpa_agent::log::warn(format!("tarifas: {e}")),
+                }
             }
         }
+        std::thread::sleep(Duration::from_secs(300));
     });
 }
