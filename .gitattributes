@@ -1,0 +1,17 @@
+# Line endings: the repo is authored on Linux (WSL) and built on Windows.
+# Everything checked out must be LF, on both filesystems, so `git status` stays
+# honest and MSVC/rustc receive the same bytes as CI.
+* text=auto eol=lf
+
+# Binary assets: never converted, never diffed as text. `*.bin` and `*.jwt` are
+# test fixtures (IPP captures, entitlement tokens); the REA corpus is PDF/PNG.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.pdf binary
+*.bin binary
+*.jwt binary
+*.p12 binary
+*.exe binary
+*.dll binary
