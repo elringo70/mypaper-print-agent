@@ -1,7 +1,15 @@
 [workspace]
 resolver = "2"
-members = ["crates/domain", "crates/spool", "crates/analyzer", "crates/agent", "crates/sync", "crates/update", "crates/cli", "crates/ui", "crates/desktop", "crates/ipp"]
+members = ["crates/domain", "crates/spool", "crates/analyzer", "crates/agent", "crates/sync", "crates/update", "crates/cli", "crates/ui", "crates/desktop", "crates/ipp", "crates/local-api"]
 exclude = ["third-party/xattr"]
+
+# Dev loop: `debug = 1` keeps line tables (backtraces stay readable) while
+# cutting the MSVC link step, which is the slow half of every Rust rebuild.
+# Bundling is unaffected: `tauri build` and packaging/build.ps1 use `release`.
+[profile.dev]
+incremental = true
+debug = 1
+opt-level = 0
 
 [patch.crates-io]
 # Vendored one-line fix: xattr 0.2.3 (pinned by zed-async-tar via gpui)

@@ -35,9 +35,11 @@ jobs:
           npm ci
           npm run build
 
+      # mpa-desktop's test binary carries a requireAdministrator manifest, so it
+      # cannot start from a non-elevated runner. Clippy still compiles it.
       - name: Tests + lints
         run: |
-          cargo test --workspace --locked
+          cargo test --workspace --exclude mpa-desktop --locked
           cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Release binaries
@@ -52,7 +54,23 @@ jobs:
           $version = '${{ github.ref_name }}'.TrimStart('v')
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$version" packaging\mpa.iss
 
+      # Signing needs the release key. Without the secret the installer is still
+      # built and published unsigned, so a fork or a dry run can produce one; the
+      # manifest then carries no signature instead of a broken one.
+      - name: Detect signing key
+        id: signing
+        shell: pwsh
+        env:
+          MPA_MINISIGN_KEY: ${{ secrets.MPA_MINISIGN_KEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:MPA_MINISIGN_KEY)) {
+            "has_key=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } else {
+            "has_key=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          }
+
       - name: Sign installer
+        if: steps.signing.outputs.has_key == 'true'
         shell: pwsh
         env:
           MPA_MINISIGN_KEY: ${{ secrets.MPA_MINISIGN_KEY }}
@@ -72,7 +90,7 @@ jobs:
           $version = '${{ github.ref_name }}'.TrimStart('v')
           $setup = "Output\mpa-$version-setup.exe"
           $hash = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLower()
-          $sig = Get-Content "$setup.minisig" -Raw
+          $sig = if (Test-Path "$setup.minisig") { Get-Content "$setup.minisig" -Raw } else { $null }
           @{ version = $version
              url = "https://github.com/${{ github.repository }}/releases/download/v$version/mpa-$version-setup.exe"
              sha256 = $hash
@@ -86,3 +104,4 @@ jobs:
             Output/mpa-*-setup.exe
             Output/mpa-*-setup.exe.minisig
             Output/latest.json
+          fail_on_unmatched_files: false

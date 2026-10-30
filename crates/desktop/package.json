@@ -1,0 +1,16 @@
+{
+	"name": "mpa-desktop",
+	"private": true,
+	"version": "0.4.0",
+	"description": "Tauri shell for the MyPaper Print Agent. The Svelte frontend lives in ./ui.",
+	"scripts": {
+		"tauri": "tauri dev",
+		"tauri:dev": "tauri dev",
+		"tauri:dev:nowatch": "tauri dev --no-watch",
+		"tauri:build": "tauri build",
+		"ui": "npm --prefix ui run dev"
+	},
+	"devDependencies": {
+		"@tauri-apps/cli": "^2.0.0"
+	}
+}

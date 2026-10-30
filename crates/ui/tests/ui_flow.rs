@@ -107,12 +107,14 @@ fn demo_tickets() -> Vec<mpa_agent::Ticket> {
             id: "order-101".into(),
             ticket_number: 101,
             cashier: "Ana".into(),
+            customer: None,
             total: 85.50,
         },
         mpa_agent::Ticket {
             id: "order-102".into(),
             ticket_number: 102,
             cashier: "Luis".into(),
+            customer: None,
             total: 12.00,
         },
     ]

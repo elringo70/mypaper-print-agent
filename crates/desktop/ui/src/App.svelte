@@ -15,7 +15,8 @@
 	);
 
 	// Polling a version stamp is enough: the core bumps it on every change and
-	// the snapshot is a few kilobytes, so there is no event stream to desync.
+	// the snapshot is only read when it moved, so there is no event stream to
+	// desync and no megabyte of thumbnails per poll.
 	let seen = -1;
 
 	/** Read the core once, now. Mutations call this instead of waiting up to a
@@ -23,10 +24,8 @@
 	async function refreshSnapshot() {
 		try {
 			const next = await api.snapshot();
-			if (next.version !== seen) {
-				seen = next.version;
-				snapshot = next;
-			}
+			seen = next.version;
+			snapshot = next;
 		} catch (e) {
 			error = String(e);
 		}
@@ -36,11 +35,12 @@
 		let alive = true;
 		const tick = async () => {
 			try {
+				const version = await api.version();
+				if (!alive || version === seen) return;
 				const next = await api.snapshot();
-				if (alive && next.version !== seen) {
-					seen = next.version;
-					snapshot = next;
-				}
+				if (!alive) return;
+				seen = next.version;
+				snapshot = next;
 			} catch (e) {
 				if (alive) error = String(e);
 			}
@@ -123,17 +123,24 @@
 	 */
 	let quotes = $state<Record<string, QuoteDto>>({});
 	let quoteError = $state<string | null>(null);
+	/** Last request issued per job: an older answer must never overwrite a newer one. */
+	const quoteSeq = new Map<string, number>();
 
 	function jobKey(job: JobDto) {
 		return `${job.printer}#${job.jobId}`;
 	}
 
 	async function refreshQuote(job: JobDto) {
+		const key = jobKey(job);
+		const seq = (quoteSeq.get(key) ?? 0) + 1;
+		quoteSeq.set(key, seq);
 		try {
-			quotes[jobKey(job)] = await api.quote(job.printer, job.jobId);
+			const quote = await api.quote(job.printer, job.jobId);
+			if (quoteSeq.get(key) !== seq) return;
+			quotes[key] = quote;
 			quoteError = null;
 		} catch (e) {
-			quoteError = String(e);
+			if (quoteSeq.get(key) === seq) quoteError = String(e);
 		}
 	}
 
@@ -141,12 +148,12 @@
 
 	$effect(() => {
 		const job = current;
-		// Any change reprices, but the burst is coalesced: one HTTP round trip
-		// per click is what made mode and page toggles crawl.
+		// Any change reprices, but the burst is coalesced. The command runs off
+		// the UI thread now, so the window keeps painting during the round trip.
 		snapshot?.version;
 		if (!job || job.pages.length === 0) return;
 		clearTimeout(quoteTimer);
-		quoteTimer = setTimeout(() => refreshQuote(job), 150);
+		quoteTimer = setTimeout(() => refreshQuote(job), 250);
 		return () => clearTimeout(quoteTimer);
 	});
 
@@ -154,18 +161,57 @@
 		return quotes[jobKey(job)] ?? null;
 	}
 
-	function modeTotal(job: JobDto) {
-		const q = quote(job);
-		if (!q) return null;
-		return job.printMode === 'Bw' ? q.bw.total : q.color.total;
-	}
-
-	function pagePrice(job: JobDto, pageNo: number) {
+	/** Unit price per page for the active rule set, resolved once per render. */
+	const prices = $derived.by(() => {
+		const job = current;
+		if (!job) return null;
 		const q = quote(job);
 		if (!q) return null;
 		const mode = job.printMode === 'Bw' ? q.bw : q.color;
-		return mode.pages.find((p) => p.pageNo === pageNo)?.unitPrice ?? null;
+		return new Map(mode.pages.map((p) => [p.pageNo, p.unitPrice]));
+	});
+
+	const modeTotal = $derived.by(() => {
+		const job = current;
+		if (!job) return null;
+		const q = quote(job);
+		if (!q) return null;
+		return job.printMode === 'Bw' ? q.bw.total : q.color.total;
+	});
+
+	function pagePrice(pageNo: number) {
+		return prices?.get(pageNo) ?? null;
 	}
+
+	/** Previews are pulled one page at a time, and kept: a page the operator
+	 *  already looked at must not be re-fetched on every poll. */
+	let thumbs = $state<Record<string, string>>({});
+	const thumbPending = new Set<string>();
+
+	function thumbKey(job: JobDto, pageNo: number) {
+		return `${job.printer}#${job.jobId}#${pageNo}`;
+	}
+
+	const preview = $derived(current ? previewPage(current) : null);
+	const previewSrc = $derived(
+		current && preview ? (thumbs[thumbKey(current, preview.pageNo)] ?? '') : ''
+	);
+
+	$effect(() => {
+		const job = current;
+		const page = preview;
+		if (!job || !page) return;
+		const key = thumbKey(job, page.pageNo);
+		if (thumbs[key] || thumbPending.has(key)) return;
+		thumbPending.add(key);
+		api
+			.pageThumbnail(job.printer, job.jobId, page.pageNo)
+			.then((url) => {
+				if (url) thumbs[key] = url;
+			})
+			.catch(() => undefined)
+			.finally(() => thumbPending.delete(key));
+	});
 
 	async function selectAll(job: JobDto, on: boolean) {
 		const touched = job.pages.filter((page) => page.included !== on);
@@ -321,10 +367,10 @@
 
 				<div class="total">
 					<span class="label">Total</span>
-					{#if modeTotal(current) === null}
+					{#if modeTotal === null}
 						<strong class="pending">sin precio</strong>
 					{:else}
-						<strong>{money(modeTotal(current))}</strong>
+						<strong>{money(modeTotal)}</strong>
 					{/if}
 					{#if quoteError}
 						<span class="small warn">sin precio: {quoteError}</span>
@@ -357,7 +403,7 @@
 												{page.areaPct !== null ? `${page.areaPct.toFixed(1)}%` : '—'}
 											</span>
 										</td>
-										<td class="cost">{money(pagePrice(current, page.pageNo))}</td>
+										<td class="cost">{money(pagePrice(page.pageNo))}</td>
 									</tr>
 								{/each}
 							</tbody>
@@ -373,21 +419,19 @@
 					</div>
 
 					<div class="preview">
-						{#if previewPage(current)}
-							<img src={previewPage(current)?.thumbnail} alt={`Página ${previewPage(current)?.pageNo}`} />
+						{#if preview}
+							{#if previewSrc}
+								<img src={previewSrc} alt={`Página ${preview.pageNo}`} />
+							{:else}
+								<div class="placeholder">cargando vista previa…</div>
+							{/if}
+							<p class="ink small">
+								Negro: {preview.k.toFixed(2)}% ·
+								Color: {Math.max(preview.c, preview.m, preview.y).toFixed(2)}% ·
+								Blanco: {(100 - (preview.areaPct ?? 0)).toFixed(2)}%
+							</p>
 						{:else}
 							<div class="placeholder">sin vista previa</div>
-						{/if}
-						{#if previewPage(current)}
-							<p class="ink small">
-								Negro: {(previewPage(current)?.k ?? 0).toFixed(2)}% ·
-								Color: {Math.max(
-									previewPage(current)?.c ?? 0,
-									previewPage(current)?.m ?? 0,
-									previewPage(current)?.y ?? 0
-								).toFixed(2)}% ·
-								Blanco: {(100 - (previewPage(current)?.areaPct ?? 0)).toFixed(2)}%
-							</p>
 						{/if}
 					</div>
 				</div>

@@ -1,0 +1,17 @@
+[package]
+name = "mpa-local-api"
+version = "0.1.0"
+publish = false
+edition = "2021"
+
+[dependencies]
+mpa-agent = { path = "../agent" }
+mpa-sync = { path = "../sync" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+rand_core = { version = "0.6", features = ["getrandom"] }
+thiserror = "2"
+
+[lints]
+workspace = true

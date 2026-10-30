@@ -541,6 +541,25 @@ impl SyncClient {
         Ok(PostedJob { id, page_count })
     }
 
+    /// Prove the operator typed the workspace's pairing code in the agent
+    /// window. The code is validated but not consumed, so a handshake for the
+    /// local browser channel never blocks a real enrollment.
+    pub fn local_grant(&self, code: &str) -> Result<bool, SyncError> {
+        let body = serde_json::json!({ "code": code });
+        let bytes = serde_json::to_vec(&body).map_err(|e| SyncError::Parse(e.to_string()))?;
+        let res = self
+            .signed("POST", "/api/agent/local-grant", Some(bytes))
+            .send()?;
+        match res.status() {
+            reqwest::StatusCode::OK => Ok(true),
+            reqwest::StatusCode::BAD_REQUEST | reqwest::StatusCode::FORBIDDEN => Ok(false),
+            _ => {
+                Self::check(res)?;
+                Ok(true)
+            }
+        }
+    }
+
     /// Prices the analyzed pages in BOTH modes without storing anything: the
     /// operator sees what each printer role would cost before choosing.
     pub fn quote(&self, pages: &[QuotePage]) -> Result<Quote, SyncError> {

@@ -4527,7 +4527,7 @@ dependencies = [
 
 [[package]]
 name = "mpa-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "chrono",
  "clap",
@@ -4544,12 +4544,13 @@ dependencies = [
 
 [[package]]
 name = "mpa-desktop"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64 0.22.1",
  "mpa-agent",
  "mpa-domain",
  "mpa-ipp",
+ "mpa-local-api",
  "mpa-spool",
  "mpa-sync",
  "mpa-update",
@@ -4575,6 +4576,19 @@ dependencies = [
 name = "mpa-ipp"
 version = "0.1.0"
 dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "mpa-local-api"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "mpa-agent",
+ "mpa-sync",
+ "rand_core 0.6.4",
+ "serde",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 

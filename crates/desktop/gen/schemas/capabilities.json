@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Permisos de la ventana principal: solo el IPC de la propia app.","local":true,"windows":["main"],"permissions":["core:default"]}}

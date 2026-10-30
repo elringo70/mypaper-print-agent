@@ -172,6 +172,19 @@ fn main() {
 
     spawn_ticket_refresh(Arc::clone(&core));
     spawn_tier_refresh(Arc::clone(&core), state_path.clone());
+    spawn_outbox_drain(Arc::clone(&core));
+
+    // Local bridge for the webapp running in the browser: the analysis is handed
+    // over on loopback, never through the server. A busy port is reported, not
+    // fatal — the agent still captures and holds jobs.
+    match mpa_local_api::serve(
+        Arc::clone(&core),
+        mpa_local_api::DEFAULT_PORT,
+        env!("CARGO_PKG_VERSION"),
+    ) {
+        Ok(api) => mpa_agent::log::info(format!("puente local en http://{}", api.addr)),
+        Err(e) => mpa_agent::log::warn(format!("puente local no disponible: {e}")),
+    }
     mpa_agent::log::info(format!(
         "starting mpa-desktop v{}",
         env!("CARGO_PKG_VERSION")
@@ -183,7 +196,9 @@ fn main() {
             runtime: Mutex::new(Some(runtime)),
         })
         .invoke_handler(tauri::generate_handler![
+            commands::version,
             commands::snapshot,
+            commands::page_thumbnail,
             commands::toggle_page,
             commands::complete_job,
             commands::cancel_job,
@@ -246,6 +261,9 @@ fn build_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     let _ = window.show();
                     let _ = window.set_focus();
                 }
+                // The operator just opened the window: refresh the ticket list
+                // now instead of on the next interval.
+                request_refresh();
             }
             "quit" => app.exit(0),
             _ => {}
@@ -257,8 +275,19 @@ fn build_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 /// Refresh the open-ticket list off the core lock, the same discipline the
 /// watcher and the reprint sweep follow: the window polls every second and must
 /// never wait on an HTTP call.
+/// Set when the window is opened, so the refresh loops run on the next second
+/// instead of waiting for their full interval.
+static REFRESH_NOW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn request_refresh() {
+    REFRESH_NOW.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
 fn spawn_ticket_refresh(core: Arc<Mutex<AgentCore>>) {
     std::thread::spawn(move || loop {
+        // Cleared before the fetch: a request that arrives mid-flight is not
+        // lost, it just lands on the next pass.
+        REFRESH_NOW.store(false, std::sync::atomic::Ordering::Relaxed);
         // Fetch first: sleeping before the first call left the destination
         // picker empty for the first half minute, which reads as "no sync".
         let source = match core.lock() {
@@ -276,7 +305,14 @@ fn spawn_ticket_refresh(core: Arc<Mutex<AgentCore>>) {
             }
             Err(e) => mpa_agent::log::warn(format!("tickets: {e}")),
         }
-        std::thread::sleep(Duration::from_secs(30));
+        // One-second slices so opening the window refreshes the list now
+        // instead of up to 30 s later.
+        for _ in 0..30 {
+            if REFRESH_NOW.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        }
     });
 }
 
@@ -306,5 +342,36 @@ fn spawn_tier_refresh(core: Arc<Mutex<AgentCore>>, state_path: std::path::PathBu
             }
         }
         std::thread::sleep(Duration::from_secs(300));
+    });
+}
+
+/// Push completed work to MyPaper and finish any pending reprint.
+///
+/// Nothing did this in the shipped window: "Imprimir" queued an outbox entry
+/// that neither reached the server nor the printer, so the operator's work was
+/// lost with the process. Same discipline as the ticket refresh: own thread,
+/// never under the core lock (the drain locks briefly and works unlocked).
+fn spawn_outbox_drain(core: Arc<Mutex<AgentCore>>) {
+    std::thread::spawn(move || loop {
+        let pending = core.lock().map(|c| c.pending_outbox()).unwrap_or(0);
+        if pending > 0 {
+            match PairingStore::load(None) {
+                Ok(pairing) => {
+                    match SyncClient::new(&pairing.server_url, Some(pairing.agent_key)) {
+                        Ok(client) => {
+                            let report = mpa_sync::drain_outbox(&core, &client);
+                            if report.has_work_left() {
+                                mpa_agent::log::warn(format!("outbox: {}", report.summary()));
+                            } else {
+                                mpa_agent::log::info(format!("outbox: {}", report.summary()));
+                            }
+                        }
+                        Err(e) => mpa_agent::log::warn(format!("outbox: {e}")),
+                    }
+                }
+                Err(e) => mpa_agent::log::warn(format!("outbox sin enlace: {e}")),
+            }
+        }
+        std::thread::sleep(Duration::from_secs(10));
     });
 }

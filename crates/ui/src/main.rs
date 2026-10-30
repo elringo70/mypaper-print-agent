@@ -48,6 +48,7 @@ fn seed_demo_job(core: &mut AgentCore) {
         spool_path: None,
         print_mode: mpa_domain::PrintMode::Bw,
         preset: None,
+        media: None,
     });
 }
 

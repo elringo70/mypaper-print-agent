@@ -724,6 +724,37 @@ impl AgentCore {
         jobs
     }
 
+    pub fn job_count(&self) -> usize {
+        self.jobs.len()
+    }
+
+    /// Job keys in the same order as `snapshot`, without cloning the jobs.
+    ///
+    /// The local HTTP bridge walks this list and reads each job one at a time;
+    /// cloning the whole queue (thumbnails included) just to serialize it would
+    /// repeat the mistake that made the window freeze.
+    pub fn job_keys(&self) -> Vec<(String, u32)> {
+        let mut keys: Vec<(String, u32)> = self.jobs.keys().cloned().collect();
+        keys.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+        keys
+    }
+
+    /// Borrow one job without cloning the queue.
+    ///
+    /// The window reads a single flag on every page click. Cloning every job
+    /// (thumbnails included) for that read is what made a click feel late.
+    pub fn job(&self, printer: &str, job_id: u32) -> Option<&WatchedJob> {
+        self.jobs.get(&(printer.to_string(), job_id))
+    }
+
+    /// Borrow one page of one job, for the same reason as `job`.
+    pub fn page(&self, printer: &str, job_id: u32, page_no: u32) -> Option<&WatchedPage> {
+        self.job(printer, job_id)?
+            .pages
+            .iter()
+            .find(|p| p.page_no == page_no)
+    }
+
     pub fn outbox(&self) -> &[OutboxEntry] {
         &self.outbox
     }

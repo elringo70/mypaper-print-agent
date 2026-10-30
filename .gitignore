@@ -8,3 +8,8 @@ packaging/minisign.key
 # Runtime de WebView2 offline y artefactos del instalador
 /vendor/webview2/
 /Output/
+
+# Local UI install (npm --prefix crates/desktop/ui install)
+crates/desktop/ui/node_modules/
+# Tauri CLI install for the desktop shell (npm --prefix crates/desktop install)
+crates/desktop/node_modules/

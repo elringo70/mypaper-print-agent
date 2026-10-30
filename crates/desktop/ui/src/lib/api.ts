@@ -10,7 +10,6 @@ export interface PageDto {
 	class: string | null;
 	tierId: string | null;
 	included: boolean;
-	thumbnail: string;
 }
 
 export interface JobDto {
@@ -70,11 +69,15 @@ export interface CheckDto {
 }
 
 /**
- * The whole bridge to Rust. Four calls, no events: polling a version stamp is
- * simpler to reason about than a live subscription, and the snapshot is small.
+ * The whole bridge to Rust. Calls only, no events: the window polls a version
+ * stamp (one number) and reads the snapshot only when it moved, so no event
+ * stream can desync. Page previews are fetched one at a time, on demand.
  */
 export const api = {
+	version: () => invoke<number>('version'),
 	snapshot: () => invoke<AppSnapshot>('snapshot'),
+	pageThumbnail: (printer: string, jobId: number, pageNo: number) =>
+		invoke<string>('page_thumbnail', { printer, jobId, pageNo }),
 	togglePage: (printer: string, jobId: number, pageNo: number, included: boolean) =>
 		invoke<void>('toggle_page', { printer, jobId, pageNo, included }),
 	complete: (printer: string, jobId: number) =>

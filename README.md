@@ -51,11 +51,50 @@ third-party/xattr crate parcheado (Cargo.toml [patch.crates-io])
 packaging         mpa.iss (Inno Setup) + build.ps1 + minisign.pub
 ```
 
+## Desarrollar (Windows, ciclo rápido)
+
+No compiles el instalador para revisar un cambio de UI. El loop de desarrollo es
+`tauri dev`: compila `mpa-desktop` en **debug**, levanta Vite con HMR y **no**
+genera instalador.
+
+```powershell
+# Terminal elevada (el manifiesto pide requireAdministrator).
+cd C:\mypaper-print-agent
+
+# Una sola vez: CLI de Tauri (shell) + dependencias del frontend (ui/).
+npm --prefix crates\desktop install
+npm --prefix crates\desktop\ui install
+
+# Loop de desarrollo. Ctrl+C para salir.
+cd crates\desktop
+npm run tauri
+```
+
+El CLI de Tauri se ejecuta **desde `crates\desktop`**: ahí viven `tauri.conf.json`
+y `package.json`. Desde `ui/` falla con *"Couldn't recognize the current folder as
+a Tauri project"*.
+
+- `npm run tauri` / `npm run tauri:dev` → `tauri dev`.
+- `npm run tauri:dev:nowatch` desactiva el reinicio automático por cambios en Rust.
+- `cargo tauri dev` es equivalente si instalaste el CLI de cargo: `cargo install tauri-cli --locked`.
+- Cambios en `.svelte`/`.ts`/CSS: HMR instantáneo, **cero** compilación Rust.
+- Cambios en `crates/desktop/src`: recompila ese crate y reinicia la ventana (segundos).
+- Cambios en otros crates (`agent`, `spool`, `sync`): el watcher no los cubre; reinicia con `Ctrl+C` + `npx tauri dev`.
+- El `target/` se mantiene caliente: **nunca** corras `cargo clean` para ahorrar tiempo, es lo contrario.
+- Excluir `target\` de Windows Defender ahorra minutos de escaneo por link:
+  `Add-MpPreference -ExclusionPath "C:\mypaper-print-agent\target"`.
+- Sólo el frontend, sin app nativa: `cd crates\desktop\ui; npm run dev` y abre
+  `http://127.0.0.1:1420` en el navegador. Los `invoke` fallan ahí: sirve para maquetar.
+
+El CSP de desarrollo vive en `app.security.devCsp` (`crates/desktop/tauri.conf.json`)
+y permite el WebSocket de HMR; el CSP de producción sigue sin `unsafe-inline`.
+
 ## Compilar y ejecutar (Windows)
 
-```bat
-:: MSVC; genera target\release\mpa.exe y mpa-ui.exe
-mpa-build.bat
+```powershell
+# MSVC; release + instalador Inno Setup (tarda minutos, no es el loop de dev)
+.\packaging\build.ps1
+.\packaging\build.ps1 -SkipTests -SkipWebView2
 ```
 
 - Requiere **Ghostscript 10.08** y **GhostPCL** (`gpcl6win64.exe`) en

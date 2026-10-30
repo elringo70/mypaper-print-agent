@@ -3,6 +3,11 @@
 //! Every command takes the core lock briefly and never does IO inside it: the
 //! spooler and the printer are slow, and the watcher threads need that lock.
 //! Long work (reprint, sync) already lives on its own thread.
+//!
+//! Commands are declared `#[tauri::command(async)]` on purpose: a plain command
+//! runs inline in the WebView's IPC handler, i.e. on the UI thread, so a 15 s
+//! HTTP round trip inside one froze the window. Async commands run on the
+//! runtime's thread pool and the window keeps painting while they work.
 
 use crate::dto::{AppSnapshot, CheckDto, JobDto, PageDto, TicketDto};
 use crate::AppState;
@@ -29,8 +34,17 @@ fn data_url(png: &[u8]) -> String {
     }
 }
 
-/// Full snapshot, cheap enough to poll every second.
-#[tauri::command]
+/// Core change counter. The window polls this instead of the full snapshot:
+/// one number per second, and the snapshot is only fetched when it moved.
+#[tauri::command(async)]
+pub fn version(state: State<'_, AppState>) -> Result<u64, String> {
+    let core = lock(&state.core)?;
+    Ok(core.version())
+}
+
+/// Full snapshot, one per core change. Page previews are NOT included: a
+/// 100-page job would push megabytes of base64 through IPC on every read.
+#[tauri::command(async)]
 pub fn snapshot(state: State<'_, AppState>) -> Result<AppSnapshot, String> {
     let core = lock(&state.core)?;
     let jobs = core
@@ -72,7 +86,6 @@ pub fn snapshot(state: State<'_, AppState>) -> Result<AppSnapshot, String> {
                         .map(|c| c.as_str().to_string()),
                     tier_id: page.tier_id.clone(),
                     included: page.included,
-                    thumbnail: data_url(&page.thumbnail_png),
                 })
                 .collect(),
         })
@@ -100,8 +113,24 @@ pub fn snapshot(state: State<'_, AppState>) -> Result<AppSnapshot, String> {
     })
 }
 
+/// One page preview, fetched only when the operator looks at it.
+#[tauri::command(async)]
+pub fn page_thumbnail(
+    state: State<'_, AppState>,
+    printer: String,
+    job_id: u32,
+    page_no: u32,
+) -> Result<String, String> {
+    let core = lock(&state.core)?;
+    let png = core
+        .page(&printer, job_id, page_no)
+        .map(|p| p.thumbnail_png.clone())
+        .unwrap_or_default();
+    Ok(data_url(&png))
+}
+
 /// Include or exclude one page from the billed job.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn toggle_page(
     state: State<'_, AppState>,
     printer: String,
@@ -112,12 +141,7 @@ pub fn toggle_page(
     let mut core = lock(&state.core)?;
     // The core flips the flag; only ask when the UI disagrees with it, so a
     // duplicated click cannot undo itself.
-    let current = core
-        .snapshot()
-        .into_iter()
-        .find(|j| j.printer == printer && j.job_id == job_id)
-        .and_then(|j| j.pages.into_iter().find(|p| p.page_no == page_no))
-        .map(|p| p.included);
+    let current = core.page(&printer, job_id, page_no).map(|p| p.included);
     if current == Some(included) {
         return Ok(());
     }
@@ -126,7 +150,7 @@ pub fn toggle_page(
 }
 
 /// Release the job and hand the selected pages to the outbox for MyPaper.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn complete_job(
     state: State<'_, AppState>,
     printer: String,
@@ -136,18 +160,13 @@ pub fn complete_job(
     // A captured job has no held spooler job to release: the operator's
     // authorisation is what queues the print.
     if printer == mpa_agent::CAPTURE_PRINTER {
-        let mode = core
-            .snapshot()
-            .into_iter()
-            .find(|j| j.printer == printer && j.job_id == job_id)
-            .map(|j| j.print_mode)
-            .unwrap_or_default();
-        let target = core
-            .snapshot()
-            .into_iter()
-            .find(|j| j.printer == printer && j.job_id == job_id)
-            .map(|j| j.target)
-            .unwrap_or(mpa_agent::TargetSelection::Unassigned);
+        let (mode, target) = core
+            .job(&printer, job_id)
+            .map(|j| (j.print_mode, j.target.clone()))
+            .unwrap_or((
+                mpa_domain::PrintMode::Bw,
+                mpa_agent::TargetSelection::Unassigned,
+            ));
         return core
             .authorize_captured(&printer, job_id, mode, target)
             .map(|_| ())
@@ -159,7 +178,7 @@ pub fn complete_job(
 }
 
 /// Cancel the job in the spooler; nothing is billed.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn cancel_job(state: State<'_, AppState>, printer: String, job_id: u32) -> Result<(), String> {
     let mut core = lock(&state.core)?;
     core.cancel_job(&printer, job_id).map_err(|e| e.to_string())
@@ -169,20 +188,18 @@ pub fn cancel_job(state: State<'_, AppState>, printer: String, job_id: u32) -> R
 ///
 /// The price always comes from the server: a local guess would drift from what
 /// the ticket charges, and the operator reads this number to decide.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn quote(
     state: State<'_, AppState>,
     printer: String,
     job_id: u32,
 ) -> Result<crate::dto::QuoteDto, String> {
-    let core = lock(&state.core)?;
-    let pages = core
-        .snapshot()
-        .into_iter()
-        .find(|j| j.printer == printer && j.job_id == job_id)
-        .map(|j| j.pages)
-        .ok_or_else(|| "trabajo no encontrado".to_string())?;
-    drop(core);
+    let pages = {
+        let core = lock(&state.core)?;
+        core.job(&printer, job_id)
+            .map(|j| j.pages.clone())
+            .ok_or_else(|| "trabajo no encontrado".to_string())?
+    };
 
     let pairing = mpa_sync::PairingStore::load(None).map_err(|e| e.to_string())?;
     let client = mpa_sync::SyncClient::new(&pairing.server_url, Some(pairing.agent_key))
@@ -220,16 +237,19 @@ fn mode_quote(mode: &mpa_sync::QuoteMode) -> crate::dto::ModeQuoteDto {
 }
 
 /// The same checks `mpa doctor` runs, for the window's status panel.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn doctor(state: State<'_, AppState>) -> Result<Vec<CheckDto>, String> {
-    let core = lock(&state.core)?;
+    let jobs = {
+        let core = lock(&state.core)?;
+        core.job_count()
+    };
     let mut rows = Vec::new();
 
-    match !core.snapshot().is_empty() {
+    match jobs > 0 {
         true => rows.push(CheckDto {
             name: "trabajos".into(),
             health: "ok".into(),
-            detail: format!("{} en curso", core.snapshot().len()),
+            detail: format!("{jobs} en curso"),
         }),
         false => rows.push(CheckDto {
             name: "trabajos".into(),
@@ -271,7 +291,7 @@ pub fn doctor(state: State<'_, AppState>) -> Result<Vec<CheckDto>, String> {
 }
 
 /// Where the draft goes: a new ticket line set, an open ticket, or nowhere yet.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn select_target(
     state: State<'_, AppState>,
     printer: String,
@@ -293,7 +313,7 @@ pub fn select_target(
 }
 
 /// Print preset for this job (`None` keeps the driver's own settings).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_preset(
     state: State<'_, AppState>,
     printer: String,
@@ -306,7 +326,7 @@ pub fn set_preset(
 }
 
 /// B/N or color for this job: it decides which rule set prices the pages.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_print_mode(
     state: State<'_, AppState>,
     printer: String,

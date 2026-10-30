@@ -88,9 +88,9 @@ pub struct PageDto {
     pub area_pct: Option<f32>,
     pub class: Option<String>,
     pub tier_id: Option<String>,
+    // Page previews are fetched separately (`page_thumbnail`): shipping every
+    // thumbnail here turned each poll into megabytes of base64.
     pub included: bool,
-    /// `data:image/png;base64,…`, empty when the page has no preview.
-    pub thumbnail: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
