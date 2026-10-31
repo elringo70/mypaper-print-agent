@@ -727,7 +727,7 @@ fn doctor_command(config_override: Option<PathBuf>) -> Result<(), AppError> {
                     p.server_url, p.workspace_id
                 ),
             );
-            match mpa_sync::SyncClient::new(&p.server_url, Some(p.agent_key.clone())) {
+            match mpa_sync::connect(&p.server_url, Some(p.agent_key.clone())) {
                 Ok(client) => match client.get_version() {
                     Ok(v) => check(
                         &mut rows,
@@ -873,7 +873,7 @@ fn update_command(action: UpdateAction) -> Result<(), AppError> {
                 .manifest_url
                 .or(channel.server_url)
                 .unwrap_or_default();
-            let client = mpa_sync::SyncClient::new(&base, channel.agent_key)?;
+            let client = mpa_sync::connect(&base, channel.agent_key)?;
             let staged = mpa_update::fetch_verified(&client, &manifest)
                 .map_err(|e| AppError::Tiers(format!("descarga/verificación: {e}")))?;
             println!("verificado: {}", staged.display());
@@ -939,7 +939,7 @@ fn sync_command(config_override: Option<PathBuf>) -> Result<(), AppError> {
     let (core, state_path) = load_core(config_override)?;
     let core = Arc::new(Mutex::new(core));
     let pairing = PairingStore::load(None)?;
-    let client = SyncClient::new(&pairing.server_url, Some(pairing.agent_key))?;
+    let client = mpa_sync::connect(&pairing.server_url, Some(pairing.agent_key))?;
     let report = drain_outbox(&core, &client);
     save_core(&core.lock().expect("agent core"), &state_path)?;
     println!("{}", report.summary());
@@ -1018,7 +1018,7 @@ fn push_test_command(
         remote_id: None,
         materialized: false,
     };
-    let client = SyncClient::new(&server_url, Some(agent_key))?;
+    let client = mpa_sync::connect(&server_url, Some(agent_key))?;
     println!(
         "enviando\t{server_url}\tpaginas {}\tcobertura C{} M{} Y{} K{}\tidempotency {idempotency_key}",
         entry.pages.len(),
@@ -1151,7 +1151,7 @@ fn tiers_command(
         }
         Some(TierAction::Sync) => {
             let pairing = PairingStore::load(None)?;
-            let client = SyncClient::new(&pairing.server_url, Some(pairing.agent_key))?;
+            let client = mpa_sync::connect(&pairing.server_url, Some(pairing.agent_key))?;
             let remote = client.get_tiers()?;
             let sync = client.get_tiers_sync()?;
             let tiers: Vec<Tier> = sync.tiers.clone();
@@ -1213,7 +1213,7 @@ fn entitlement_command(status_only: bool) -> Result<(), AppError> {
     if !status_only {
         let pairing = mpa_sync::PairingStore::load(None)?;
         let client =
-            mpa_sync::SyncClient::new(&pairing.server_url, Some(pairing.agent_key.clone()))?;
+            mpa_sync::connect(&pairing.server_url, Some(pairing.agent_key.clone()))?;
         let fresh = client.get_entitlement()?;
         if let Some(parent) = token_path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -1620,7 +1620,7 @@ fn register(captured: &mpa_agent::billing::CapturedJob<'_>, analysis: &mpa_analy
         }
     };
     let entry = mpa_agent::billing::draft_for(captured, analysis);
-    let client = match SyncClient::new(&pairing.server_url, Some(pairing.agent_key)) {
+    let client = match mpa_sync::connect(&pairing.server_url, Some(pairing.agent_key)) {
         Ok(client) => client,
         Err(e) => {
             println!("ipp: cliente sin configurar: {e}");

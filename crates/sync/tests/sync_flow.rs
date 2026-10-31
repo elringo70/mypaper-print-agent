@@ -123,7 +123,7 @@ fn pair_posts_code_and_pc_name() {
     let pairing = SyncClient::pair(&stub.base_url, "ABCD1234", "PC-03").unwrap();
     assert_eq!(pairing.agent_key, "k1");
     let req = stub.requests.lock().unwrap()[0].clone();
-    assert!(req.contains("POST /api/agent/pair"));
+    assert!(req.contains("POST /api/print-agent/v1/pair"));
     assert!(req.contains(r#""code":"ABCD1234""#));
     assert!(req.contains(r#""pcName":"PC-03""#));
 }
@@ -151,7 +151,7 @@ fn post_job_sends_pages_with_flags_and_target() {
     let remote = client.post_job(&entry()).unwrap();
     assert_eq!(remote.id, "job-9");
     let req = stub.requests.lock().unwrap()[0].clone();
-    assert!(req.contains("POST /api/agent/jobs"));
+    assert!(req.contains("POST /api/print-agent/v1/jobs"));
     assert!(req.contains(r#""idempotencyKey":"PC-1-42-7""#));
     assert!(req.contains(r#""targetOrderId":"order-101""#));
     assert!(req.contains(r#""pageNo":1"#));
@@ -179,7 +179,7 @@ fn recent_jobs_read_back_the_server_view() {
     assert_eq!(jobs[0].total, 30.0);
     assert!(jobs[0].target_order_id.is_none());
     let req = stub.requests.lock().unwrap()[0].clone();
-    assert!(req.contains("GET /api/agent/jobs"));
+    assert!(req.contains("GET /api/print-agent/v1/jobs"));
     assert!(req.contains("Bearer k1"));
 
     let minimal = client.get_recent_jobs().unwrap();
@@ -266,7 +266,7 @@ fn materialize_posts_to_job_url_and_parses_ack() {
     assert!(!ack.already);
     assert_eq!(ack.added_total, 16.0);
     let req = stub.requests.lock().unwrap()[0].clone();
-    assert!(req.contains("POST /api/agent/jobs/job-9/materialize"));
+    assert!(req.contains("POST /api/print-agent/v1/jobs/job-9/materialize"));
     assert!(req.contains("Bearer k1"));
 }
 

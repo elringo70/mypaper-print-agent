@@ -7,7 +7,7 @@ HTTP con la webapp y, en el sentido contrario, con el navegador por loopback.
 
 | Superficie | Quién inicia | Transporte | Versión hoy |
 | --- | --- | --- | --- |
-| Servidor → agente | agente | HTTPS `https://<dominio>/api/agent/*` | sin versión |
+| Servidor → agente | agente | HTTPS `https://<dominio>/api/print-agent/v1/*` | **v1** (alias `/api/agent/*`) |
 | Navegador → agente | pestaña del POS | HTTP `http://127.0.0.1:8632/v1/*` | **v1** (ya versionado) |
 
 `crates/local-api` ya expone `/v1/status`, `/v1/handshake`, `/v1/jobs`,
@@ -19,16 +19,17 @@ El lado del servidor es el que necesita versión: hoy son 12 rutas bajo
 `open-tickets`, `jobs`, `jobs/[id]/materialize`, `quote`, `local-grant`,
 `heartbeat`, `version`).
 
-## Propuesta: `/v1/agent/*`
+## Forma implementada: `/api/print-agent/v1/*`
 
-1. La webapp sirve `v1` y deja `/api/agent/*` como alias durante una ventana de
-   deprecación (mismo handler, un solo `rewrite`).
+1. La webapp sirve `/api/print-agent/v1/*` y deja `/api/agent/*` como alias
+   durante una ventana de deprecación: cada archivo del alias reexporta el
+   handler canónico, sin lógica duplicada.
 2. El agente manda dos cabeceras en cada request:
    - `X-Agent-Contract: 1`
    - `X-Agent-Version: <semver del binario>`
 3. El servidor responde `426 Upgrade Required` si el contrato es menor al mínimo
    soportado, con JSON `{ "error": "contract_unsupported", "min": 1, "server": 1 }`.
-4. Handshake al arrancar: `GET /v1/agent/capabilities` devuelve
+4. Handshake al arrancar: `GET /api/print-agent/v1/capabilities` devuelve
 
 ```json
 {
@@ -102,6 +103,6 @@ versionado no es consecuencia del layout de repos, es una decisión aparte.
 
 ## Pendiente de aprobación
 
-- Mover las 12 rutas a `/v1/agent/*` en la webapp y en `crates/sync` (una sola PR
-  por repo, con alias de compatibilidad).
-- Agregar `ts-rs` a `crates/sync` y el paso de CI de bindings.
+- Retirar el alias `/api/agent/*` cuando ningún equipo reporte
+  `X-Agent-Version` menor a 0.4.0 en los logs.
+- Paso de CI que compare los `.ts` de `crates/sync/bindings/` con los del webapp.

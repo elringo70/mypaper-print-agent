@@ -2,7 +2,9 @@
 //! server predates `/v1`. Both halves are cheapest to check against a socket
 //! stub: the real server lives in another repo.
 
-use mpa_sync::{SyncClient, CONTRACT_HEADER, CONTRACT_VERSION, VERSION_HEADER};
+use mpa_sync::{
+    SyncClient, CONTRACT_BASE, CONTRACT_HEADER, CONTRACT_VERSION, LEGACY_BASE, VERSION_HEADER,
+};
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
@@ -69,8 +71,21 @@ fn capabilities_is_none_when_the_server_has_no_v1_routes() {
     assert!(caps.is_none(), "a 404 must mean 'no v1 yet', not an error");
     let raw = seen.lock().unwrap().to_ascii_lowercase();
     assert!(
-        raw.contains("/v1/agent/capabilities"),
+        raw.contains("/api/print-agent/v1/capabilities"),
         "capabilities must probe the versioned path:\n{raw}"
+    );
+}
+
+#[test]
+fn a_404_on_capabilities_pins_the_legacy_base() {
+    let (base_url, _seen) = stub(404, r#"{"error":"not found"}"#);
+    let mut client = SyncClient::new(&base_url, None).unwrap();
+    assert_eq!(client.base_path(), CONTRACT_BASE);
+    assert!(client.negotiate().unwrap().is_none());
+    assert_eq!(
+        client.base_path(),
+        LEGACY_BASE,
+        "an old server must keep working through the unversioned alias"
     );
 }
 

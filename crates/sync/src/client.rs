@@ -18,6 +18,16 @@ pub const CONTRACT_HEADER: &str = "X-Agent-Contract";
 /// the "equipos enlazados" table).
 pub const VERSION_HEADER: &str = "X-Agent-Version";
 
+/// Canonical base for every agent call. The version lives in the path so a
+/// future breaking change ships as `/v2` instead of a conditional inside every
+/// handler, and a device that never updates keeps working on `/v1`.
+pub const CONTRACT_BASE: &str = "/api/print-agent/v1";
+
+/// Unversioned base, still served by the webapp as an alias. The agent falls
+/// back to it when `/capabilities` answers 404, i.e. the server predates the
+/// versioned contract.
+pub const LEGACY_BASE: &str = "/api/agent";
+
 /// Product version reported to the server. Set once by the binary that owns the
 /// window (`mpa-desktop`) or the CLI; this crate's own version would be a crate
 /// number, not the shipped build.
@@ -382,13 +392,15 @@ impl Quote {
     }
 }
 
-/// Thin client for the Fase 0 contract (`/api/agent/*`). Bearer key on
+/// Thin client for the agent contract (`/api/print-agent/v1/*`). Bearer key on
 /// every call except `pair` and `version`.
 pub struct SyncClient {
     base_url: String,
     agent_key: Option<String>,
     /// Reported to the server on every call (`X-Agent-Version`).
     agent_version: String,
+    /// Contract base in use; `LEGACY_BASE` after a failed negotiation.
+    base: &'static str,
     /// Present when the pairing store holds a device key.
     device: Option<crate::sign::DeviceKey>,
     http: reqwest::blocking::Client,
@@ -423,6 +435,7 @@ impl SyncClient {
             // Version of the binary that owns the client when the app stamped
             // one; this crate's number otherwise.
             agent_version: agent_version(),
+            base: CONTRACT_BASE,
             device,
             http,
         })
@@ -439,11 +452,57 @@ impl SyncClient {
         self
     }
 
+    /// Contract base in use. Exposed for tests and diagnostics.
+    pub fn base_path(&self) -> &'static str {
+        self.base
+    }
+
+    /// Full path for a contract endpoint under the resolved base.
+    fn path(&self, suffix: &str) -> String {
+        format!("{}{suffix}", self.base)
+    }
+
+    /// Resolves which contract the server speaks and pins the base.
+    ///
+    /// A server that answers 404 on `/capabilities` predates the versioned
+    /// paths: the client then stays on [`LEGACY_BASE`] for its whole life so an
+    /// un-updated MyPaper keeps working with an updated agent.
+    pub fn negotiate(&mut self) -> Result<Option<Capabilities>, SyncError> {
+        match self.capabilities()? {
+            Some(caps) => Ok(Some(caps)),
+            None => {
+                self.base = LEGACY_BASE;
+                Ok(None)
+            }
+        }
+    }
+
     pub fn pair(base_url: &str, code: &str, pc_name: &str) -> Result<Pairing, SyncError> {
+        // Pairing is the first contact, so there is no earlier handshake to
+        // learn the base from: try the versioned path and fall back once when
+        // the server has not been updated yet.
+        let mut last = None;
+        for base in [CONTRACT_BASE, LEGACY_BASE] {
+            match Self::pair_at(base_url, code, pc_name, base) {
+                Ok(pairing) => return Ok(pairing),
+                Err(SyncError::Status(code, body)) if code == 404 => last = Some((code, body)),
+                Err(other) => return Err(other),
+            }
+        }
+        let (status, body) = last.unwrap_or((404, String::from("no pairing route")));
+        Err(SyncError::Status(status, body))
+    }
+
+    fn pair_at(
+        base_url: &str,
+        code: &str,
+        pc_name: &str,
+        base: &str,
+    ) -> Result<Pairing, SyncError> {
         let http = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(15))
             .build()?;
-        let url = format!("{}/api/agent/pair", base_url.trim_end_matches('/'));
+        let url = format!("{}{base}/pair", base_url.trim_end_matches('/'));
         // A fresh identity per pairing: re-pairing rotates the key, which is
         // also how a suspected copy is invalidated.
         let device = crate::sign::DeviceKey::generate();
@@ -544,7 +603,7 @@ impl SyncClient {
     }
 
     pub fn get_version(&self) -> Result<VersionInfo, SyncError> {
-        let url = format!("{}/api/agent/version", self.base_url);
+        let url = format!("{}{}/version", self.base_url, self.base);
         let res = Self::check(self.contract(self.http.get(&url)).send()?)?;
         res.json().map_err(|e| SyncError::Parse(e.to_string()))
     }
@@ -553,7 +612,7 @@ impl SyncClient {
     /// unversioned `/api/agent/*` routes, so the caller keeps the contract-1
     /// assumptions instead of refusing to work.
     pub fn capabilities(&self) -> Result<Option<Capabilities>, SyncError> {
-        let url = format!("{}/v1/agent/capabilities", self.base_url);
+        let url = format!("{}{}/capabilities", self.base_url, self.base);
         let res = self.contract(self.http.get(&url)).send()?;
         if res.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
@@ -565,14 +624,16 @@ impl SyncClient {
     }
 
     pub fn get_tiers(&self) -> Result<Vec<RemoteTier>, SyncError> {
-        let res = Self::check(self.signed("GET", "/api/agent/tiers", None).send()?)?;
+        let path = self.path("/tiers");
+        let res = Self::check(self.signed("GET", &path, None).send()?)?;
         let body: TiersResponse = res.json().map_err(|e| SyncError::Parse(e.to_string()))?;
         Ok(body.tiers)
     }
 
     /// Tabulador mapped to domain types plus the metrics in force.
     pub fn get_tiers_sync(&self) -> Result<TierSync, SyncError> {
-        let res = Self::check(self.signed("GET", "/api/agent/tiers", None).send()?)?;
+        let path = self.path("/tiers");
+        let res = Self::check(self.signed("GET", &path, None).send()?)?;
         let body: TiersResponse = res.json().map_err(|e| SyncError::Parse(e.to_string()))?;
         Ok(TierSync {
             tiers: body.tiers.iter().map(|t| t.to_domain()).collect(),
@@ -587,7 +648,8 @@ impl SyncClient {
     }
 
     pub fn get_open_tickets(&self) -> Result<Vec<mpa_agent::Ticket>, SyncError> {
-        let res = Self::check(self.signed("GET", "/api/agent/open-tickets", None).send()?)?;
+        let path = self.path("/open-tickets");
+        let res = Self::check(self.signed("GET", &path, None).send()?)?;
         let body: TicketsResponse = res.json().map_err(|e| SyncError::Parse(e.to_string()))?;
         Ok(body
             .tickets
@@ -609,12 +671,14 @@ impl SyncClient {
     /// Server-signed offline entitlement (absolute expiry, never extended
     /// locally). Absent on servers predating the feature.
     pub fn get_entitlement(&self) -> Result<EntitlementToken, SyncError> {
-        let res = Self::check(self.signed("GET", "/api/agent/entitlement", None).send()?)?;
+        let path = self.path("/entitlement");
+        let res = Self::check(self.signed("GET", &path, None).send()?)?;
         res.json().map_err(|e| SyncError::Parse(e.to_string()))
     }
 
     pub fn get_recent_jobs(&self) -> Result<Vec<RemoteJob>, SyncError> {
-        let res = Self::check(self.signed("GET", "/api/agent/jobs", None).send()?)?;
+        let path = self.path("/jobs");
+        let res = Self::check(self.signed("GET", &path, None).send()?)?;
         let body: JobsResponse = res.json().map_err(|e| SyncError::Parse(e.to_string()))?;
         Ok(body.jobs)
     }
@@ -648,7 +712,7 @@ impl SyncClient {
                 .collect(),
         };
         let bytes = serde_json::to_vec(&body).map_err(|e| SyncError::Parse(e.to_string()))?;
-        let res = Self::check(self.signed("POST", "/api/agent/jobs", Some(bytes)).send()?)?;
+        let res = Self::check(self.signed("POST", &self.path("/jobs"), Some(bytes)).send()?)?;
         let value: serde_json::Value = res.json().map_err(|e| SyncError::Parse(e.to_string()))?;
         let id = value
             .get("jobId")
@@ -669,7 +733,7 @@ impl SyncClient {
         let body = serde_json::json!({ "code": code });
         let bytes = serde_json::to_vec(&body).map_err(|e| SyncError::Parse(e.to_string()))?;
         let res = self
-            .signed("POST", "/api/agent/local-grant", Some(bytes))
+            .signed("POST", &self.path("/local-grant"), Some(bytes))
             .send()?;
         match res.status() {
             reqwest::StatusCode::OK => Ok(true),
@@ -687,7 +751,7 @@ impl SyncClient {
         let body = serde_json::json!({ "pages": pages });
         let bytes = serde_json::to_vec(&body).map_err(|e| SyncError::Parse(e.to_string()))?;
         let res = Self::check(
-            self.signed("POST", "/api/agent/quote", Some(bytes))
+            self.signed("POST", &self.path("/quote"), Some(bytes))
                 .send()?,
         )?;
         res.json().map_err(|e| SyncError::Parse(e.to_string()))
@@ -696,10 +760,22 @@ impl SyncClient {
     /// Inject a pushed draft into its ticket as order lines. Idempotent
     /// server-side: replaying returns the same summary without duplicating.
     pub fn materialize_job(&self, job_id: &str) -> Result<MaterializeAck, SyncError> {
-        let path = format!("/api/agent/jobs/{job_id}/materialize");
+        let path = self.path(&format!("/jobs/{job_id}/materialize"));
         let res = Self::check(self.signed("POST", &path, Some(b"{}".to_vec())).send()?)?;
         res.json().map_err(|e| SyncError::Parse(e.to_string()))
     }
+}
+
+/// Builds a client and resolves which contract the server speaks.
+///
+/// Negotiation is best effort on purpose: only an explicit 404 on
+/// `/capabilities` pins the legacy base, so a server that happens to be
+/// unreachable right now never downgrades a client that will talk to a modern
+/// one later.
+pub fn connect(base_url: &str, agent_key: Option<String>) -> Result<SyncClient, SyncError> {
+    let mut client = SyncClient::new(base_url, agent_key)?;
+    let _ = client.negotiate();
+    Ok(client)
 }
 
 #[cfg(test)]
@@ -708,7 +784,7 @@ mod tests {
 
     #[test]
     fn parses_a_quote_with_both_modes() {
-        // Shape produced by POST /api/agent/quote.
+        // Shape produced by POST /api/print-agent/v1/quote.
         let raw = r#"{
             "metrics": {"BW": "K_ONLY", "COLOR": "SUM_CMYK"},
             "modes": {

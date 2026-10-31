@@ -15,7 +15,7 @@ use mpa_agent::{
     default_state_path, load_into, load_policy, load_presets, load_roles, load_tiers, save_to,
     AgentCore, AgentRuntime, MockTickets,
 };
-use mpa_sync::{HttpTickets, PairingStore, SyncClient};
+use mpa_sync::{HttpTickets, PairingStore};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::menu::{Menu, MenuItem};
@@ -58,7 +58,7 @@ fn main() {
 
     // Live tickets when paired; the window shows the demo list otherwise.
     if let Ok(pairing) = PairingStore::load(None) {
-        if let Ok(client) = SyncClient::new(&pairing.server_url, Some(pairing.agent_key.clone())) {
+        if let Ok(client) = mpa_sync::connect(&pairing.server_url, Some(pairing.agent_key.clone())) {
             let tickets: Arc<dyn mpa_agent::TicketSource> = HttpTickets::new(client);
             core.set_ticket_source(tickets);
         }
@@ -123,7 +123,7 @@ fn main() {
             let quote_client = mpa_sync::PairingStore::load(None)
                 .ok()
                 .and_then(|pairing| {
-                    mpa_sync::SyncClient::new(&pairing.server_url, Some(pairing.agent_key)).ok()
+                    mpa_sync::connect(&pairing.server_url, Some(pairing.agent_key)).ok()
                 })
                 .map(|client| Arc::new(Mutex::new(client)));
             let quote = move |pages: &[mpa_agent::pilot::PilotPage]| -> Option<(f64, f64)> {
@@ -329,7 +329,7 @@ fn spawn_ticket_refresh(core: Arc<Mutex<AgentCore>>) {
 fn spawn_tier_refresh(core: Arc<Mutex<AgentCore>>, state_path: std::path::PathBuf) {
     std::thread::spawn(move || loop {
         if let Ok(pairing) = PairingStore::load(None) {
-            if let Ok(client) = SyncClient::new(&pairing.server_url, Some(pairing.agent_key)) {
+            if let Ok(client) = mpa_sync::connect(&pairing.server_url, Some(pairing.agent_key)) {
                 match client.get_tiers_sync() {
                     Ok(sync) => {
                         let count = sync.tiers.len();
@@ -362,7 +362,7 @@ fn spawn_outbox_drain(core: Arc<Mutex<AgentCore>>) {
         if pending > 0 {
             match PairingStore::load(None) {
                 Ok(pairing) => {
-                    match SyncClient::new(&pairing.server_url, Some(pairing.agent_key)) {
+                    match mpa_sync::connect(&pairing.server_url, Some(pairing.agent_key)) {
                         Ok(client) => {
                             let report = mpa_sync::drain_outbox(&core, &client);
                             if report.has_work_left() {

@@ -202,7 +202,7 @@ pub fn quote(
     };
 
     let pairing = mpa_sync::PairingStore::load(None).map_err(|e| e.to_string())?;
-    let client = mpa_sync::SyncClient::new(&pairing.server_url, Some(pairing.agent_key))
+    let client = mpa_sync::connect(&pairing.server_url, Some(pairing.agent_key))
         .map_err(|e| e.to_string())?;
     let request: Vec<mpa_sync::QuotePage> = pages
         .iter()
