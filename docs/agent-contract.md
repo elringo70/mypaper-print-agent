@@ -62,14 +62,20 @@ Recomendación: **ts-rs** sobre `specta`.
 Cómo se usa:
 
 ```rust
-#[derive(serde::Serialize, serde::Deserialize, ts_rs::TS)]
-#[ts(export, export_to = "../../../webapp-types/")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(export, export_to = "../bindings/"))]
 pub struct RemoteTier { /* ... */ }
 ```
 
 ```powershell
-cargo test -p mpa-sync export_bindings   # escribe los .ts
+cargo test -p mpa-sync --features ts export_bindings   # escribe crates/sync/bindings/*.ts
 ```
+
+Los `.ts` viven en `crates/sync/bindings/` (incluye `PrintMode` exportado desde
+`crates/domain` y `serde_json/JsonValue.ts`). Van commiteados: son el contrato
+legible por el webapp y el diff de un PR muestra exactamente qué cambió en el
+wire. `mpa-domain` y `mpa-sync` sólo pagan la dependencia con `--features ts`; el
+binario del agente no la lleva.
 
 En la webapp se importan desde `src/lib/types/agent/` (copia versionada por
 commit, no `npm link`) y el CI falla si los `.ts` generados no coinciden con los

@@ -5,6 +5,37 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use thiserror::Error;
 
+/// Wire contract this build speaks. The server answers `426` when the value is
+/// below its minimum, so an old installer fails loudly instead of silently
+/// getting fields it cannot parse.
+pub const CONTRACT_VERSION: u32 = 1;
+
+/// Header carrying [`CONTRACT_VERSION`]. Kept as a constant because the webapp
+/// mirrors it in its own validation.
+pub const CONTRACT_HEADER: &str = "X-Agent-Contract";
+
+/// Header carrying the human-facing build version (for server-side logs and
+/// the "equipos enlazados" table).
+pub const VERSION_HEADER: &str = "X-Agent-Version";
+
+/// Product version reported to the server. Set once by the binary that owns the
+/// window (`mpa-desktop`) or the CLI; this crate's own version would be a crate
+/// number, not the shipped build.
+static AGENT_VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Stamps the version every [`SyncClient`] will send. Call it at startup, before
+/// any client is built.
+pub fn set_agent_version(version: impl Into<String>) {
+    let _ = AGENT_VERSION.set(version.into());
+}
+
+fn agent_version() -> String {
+    AGENT_VERSION
+        .get()
+        .cloned()
+        .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string())
+}
+
 #[derive(Debug, Error)]
 pub enum SyncError {
     #[error("http: {0}")]
@@ -42,6 +73,8 @@ struct PairResponse {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(export, export_to = "../bindings/"))]
 pub struct Pairing {
     pub agent_id: String,
     pub agent_key: String,
@@ -53,6 +86,8 @@ pub struct Pairing {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(export, export_to = "../bindings/"))]
 pub struct EntitlementToken {
     pub token: String,
     /// RFC 3339 instant, for display only: the token's `exp` is the authority.
@@ -63,6 +98,8 @@ pub struct EntitlementToken {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(export, export_to = "../bindings/"))]
 pub struct VersionInfo {
     #[serde(rename = "contractVersion")]
     pub contract_version: String,
@@ -70,6 +107,34 @@ pub struct VersionInfo {
     pub min_agent_version: String,
     #[serde(rename = "latestAgentVersion")]
     pub latest_agent_version: String,
+}
+
+/// Server greeting (`GET /v1/agent/capabilities`). Tells the agent which
+/// contract the server speaks and which optional features it may call, so the
+/// window can hide a control instead of failing on a 404.
+#[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(export, export_to = "../bindings/"))]
+pub struct Capabilities {
+    /// Contract the server implements. Higher than [`CONTRACT_VERSION`] is fine
+    /// as long as the features this build uses are listed.
+    pub contract: u32,
+    #[serde(default)]
+    pub server: Option<String>,
+    #[serde(rename = "minAgentVersion", default)]
+    pub min_agent_version: Option<String>,
+    #[serde(default)]
+    pub features: Vec<String>,
+    /// Server-side caps (page count, payload size). Numbers stay opaque here:
+    /// the agent only enforces what it can measure locally.
+    #[serde(default)]
+    pub limits: serde_json::Map<String, serde_json::Value>,
+}
+
+impl Capabilities {
+    pub fn supports(&self, feature: &str) -> bool {
+        self.features.iter().any(|f| f == feature)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -97,6 +162,8 @@ pub struct TierSync {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(export, export_to = "../bindings/"))]
 pub struct RemoteTier {
     pub id: String,
     pub label: String,
@@ -143,6 +210,8 @@ struct JobsResponse {
 /// client tolerates response growth.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(export, export_to = "../bindings/"))]
 pub struct RemoteJob {
     pub id: String,
     pub status: String,
@@ -190,6 +259,8 @@ struct JobPage {
 /// client tolerates future response growth.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(export, export_to = "../bindings/"))]
 pub struct MaterializeAck {
     pub order_id: String,
     pub ticket_number: i32,
@@ -221,6 +292,8 @@ struct JobBody {
 
 /// What the server stored, as it reports it back.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(export, export_to = "../bindings/"))]
 pub struct PostedJob {
     pub id: String,
     /// Pages the server actually priced. `None` on a server that predates the
@@ -231,6 +304,8 @@ pub struct PostedJob {
 /// One page as the quote endpoint expects it.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(export, export_to = "../bindings/"))]
 pub struct QuotePage {
     pub page_no: u32,
     pub c: f32,
@@ -242,6 +317,8 @@ pub struct QuotePage {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(export, export_to = "../bindings/"))]
 pub struct QuoteLine {
     pub page_no: u32,
     #[serde(default)]
@@ -261,6 +338,8 @@ pub struct QuoteLine {
 /// What one printer role would cost for the analyzed pages.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(export, export_to = "../bindings/"))]
 pub struct QuoteMode {
     #[serde(default)]
     pub total: f64,
@@ -276,6 +355,8 @@ pub struct QuoteMode {
 /// Quote for both rule sets. The server keys them by mode, uppercase.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(export, export_to = "../bindings/"))]
 pub struct QuoteModes {
     #[serde(default)]
     pub bw: QuoteMode,
@@ -284,6 +365,8 @@ pub struct QuoteModes {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(export, export_to = "../bindings/"))]
 pub struct Quote {
     #[serde(default)]
     pub modes: QuoteModes,
@@ -304,6 +387,8 @@ impl Quote {
 pub struct SyncClient {
     base_url: String,
     agent_key: Option<String>,
+    /// Reported to the server on every call (`X-Agent-Version`).
+    agent_version: String,
     /// Present when the pairing store holds a device key.
     device: Option<crate::sign::DeviceKey>,
     http: reqwest::blocking::Client,
@@ -335,6 +420,9 @@ impl SyncClient {
         Ok(Self {
             base_url,
             agent_key,
+            // Version of the binary that owns the client when the app stamped
+            // one; this crate's number otherwise.
+            agent_version: agent_version(),
             device,
             http,
         })
@@ -342,6 +430,13 @@ impl SyncClient {
 
     pub fn base_url(&self) -> &str {
         &self.base_url
+    }
+
+    /// Stamps the version the server sees in `X-Agent-Version`.
+    #[must_use]
+    pub fn with_agent_version(mut self, version: impl Into<String>) -> Self {
+        self.agent_version = version.into();
+        self
     }
 
     pub fn pair(base_url: &str, code: &str, pc_name: &str) -> Result<Pairing, SyncError> {
@@ -355,6 +450,8 @@ impl SyncClient {
         let public_key = device.public_b64();
         let res = http
             .post(&url)
+            .header(CONTRACT_HEADER, CONTRACT_VERSION.to_string())
+            .header(VERSION_HEADER, env!("CARGO_PKG_VERSION"))
             .json(&PairBody {
                 code,
                 pc_name,
@@ -376,10 +473,19 @@ impl SyncClient {
     }
 
     fn auth(&self, req: reqwest::blocking::RequestBuilder) -> reqwest::blocking::RequestBuilder {
+        let req = self.contract(req);
         match &self.agent_key {
             Some(key) => req.bearer_auth(key),
             None => req,
         }
+    }
+
+    /// Single chokepoint for the contract headers: every authenticated call and
+    /// every unsigned probe goes through here, so the server can log which build
+    /// is talking before it even has a key.
+    fn contract(&self, req: reqwest::blocking::RequestBuilder) -> reqwest::blocking::RequestBuilder {
+        req.header(CONTRACT_HEADER, CONTRACT_VERSION.to_string())
+            .header(VERSION_HEADER, &self.agent_version)
     }
 
     /// Build an agent request: bearer key plus, when a device key exists, the
@@ -439,8 +545,23 @@ impl SyncClient {
 
     pub fn get_version(&self) -> Result<VersionInfo, SyncError> {
         let url = format!("{}/api/agent/version", self.base_url);
-        let res = Self::check(self.http.get(&url).send()?)?;
+        let res = Self::check(self.contract(self.http.get(&url)).send()?)?;
         res.json().map_err(|e| SyncError::Parse(e.to_string()))
+    }
+
+    /// Versioned handshake. `Ok(None)` means the server still serves only the
+    /// unversioned `/api/agent/*` routes, so the caller keeps the contract-1
+    /// assumptions instead of refusing to work.
+    pub fn capabilities(&self) -> Result<Option<Capabilities>, SyncError> {
+        let url = format!("{}/v1/agent/capabilities", self.base_url);
+        let res = self.contract(self.http.get(&url)).send()?;
+        if res.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let res = Self::check(res)?;
+        res.json()
+            .map(Some)
+            .map_err(|e| SyncError::Parse(e.to_string()))
     }
 
     pub fn get_tiers(&self) -> Result<Vec<RemoteTier>, SyncError> {

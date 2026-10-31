@@ -327,6 +327,9 @@ enum ModeArg {
 }
 
 fn main() {
+    // Same stamp as the desktop shell: one version in the server logs no matter
+    // which binary the operator ran.
+    mpa_sync::set_agent_version(env!("CARGO_PKG_VERSION"));
     if let Err(e) = run() {
         eprintln!("mpa: error: {e}");
         std::process::exit(1);

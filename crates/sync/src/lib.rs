@@ -6,8 +6,9 @@ pub mod sign;
 pub mod tickets;
 
 pub use client::{
-    EntitlementToken, MaterializeAck, Pairing, Quote, QuoteLine, QuoteMode, QuoteModes, QuotePage,
-    RemoteTier, SyncClient, SyncError, TierSync, VersionInfo,
+    set_agent_version, Capabilities, CONTRACT_HEADER, CONTRACT_VERSION, EntitlementToken,
+    MaterializeAck, Pairing, Quote, QuoteLine, QuoteMode, QuoteModes, QuotePage, RemoteTier,
+    SyncClient, SyncError, TierSync, VERSION_HEADER, VersionInfo,
 };
 pub use drain::{drain_outbox, DrainReport};
 pub use entitlement::{

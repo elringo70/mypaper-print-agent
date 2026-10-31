@@ -36,6 +36,11 @@ impl std::fmt::Debug for AppState {
 }
 
 fn main() {
+    // Stamp the product version before any SyncClient exists: the server logs
+    // it in `X-Agent-Version` and the support table shows the shipped build,
+    // not mpa-sync's crate number.
+    mpa_sync::set_agent_version(env!("CARGO_PKG_VERSION"));
+
     let (policy, cfg_path) = load_policy(None).unwrap_or_else(|e| {
         eprintln!("mpa-desktop: config: {e}");
         std::process::exit(1);

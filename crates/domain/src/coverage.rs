@@ -26,6 +26,8 @@ impl Coverage {
 /// more expensive tier wins; on a mono printer only `Bw` applies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(export, export_to = "../../sync/bindings/"))]
 pub enum PrintMode {
     #[default]
     Bw,
