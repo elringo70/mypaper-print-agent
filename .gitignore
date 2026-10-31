@@ -11,5 +11,10 @@ packaging/minisign.key
 
 # Local UI install (npm --prefix crates/desktop/ui install)
 crates/desktop/ui/node_modules/
+
+# Regenerated on every build: tauri-build writes gen/, vite writes ui/dist.
+# Keeping them out of the index stops `git status` from churning in dev.
+crates/desktop/gen/
+crates/desktop/ui/dist/
 # Tauri CLI install for the desktop shell (npm --prefix crates/desktop install)
 crates/desktop/node_modules/
