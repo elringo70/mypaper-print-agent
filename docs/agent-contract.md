@@ -79,8 +79,9 @@ wire. `mpa-domain` y `mpa-sync` sólo pagan la dependencia con `--features ts`; 
 binario del agente no la lleva.
 
 En la webapp se importan desde `src/lib/types/agent/` (copia versionada por
-commit, no `npm link`) y el CI falla si los `.ts` generados no coinciden con los
-commiteados. Así el contrato no se rompe en silencio.
+commit, no `npm link`). El build es **local** (Windows o WSL, ver
+`docs/dev-windows.md`): no hay CI que compile, así que el paso de regenerar los
+bindings es manual y va en el mismo commit que el cambio de contrato.
 
 ## Por qué dos repos
 
