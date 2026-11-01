@@ -398,10 +398,15 @@
 											</label>
 										</td>
 										<td>
-											<span class="chip">{classLabel(page.class)}</span>
-											<span class="small muted">
-												{page.areaPct !== null ? `${page.areaPct.toFixed(1)}%` : '—'}
-											</span>
+											{#if page.blank}
+												<span class="chip">blanco</span>
+												<span class="small muted">no se imprime</span>
+											{:else}
+												<span class="chip">{classLabel(page.class)}</span>
+												<span class="small muted">
+													{page.areaPct !== null ? `${page.areaPct.toFixed(1)}%` : '—'}
+												</span>
+											{/if}
 										</td>
 										<td class="cost">{money(pagePrice(page.pageNo))}</td>
 									</tr>

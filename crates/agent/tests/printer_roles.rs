@@ -98,6 +98,7 @@ fn core_with_paused_job(
             coverage: Coverage::new(10.0, 0.0, 0.0, 20.0),
             tier_id: Some("color100".into()),
             included: *included,
+            blank: false,
             thumbnail_png: Vec::new(),
         })
         .collect();

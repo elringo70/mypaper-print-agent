@@ -86,6 +86,7 @@ pub fn snapshot(state: State<'_, AppState>) -> Result<AppSnapshot, String> {
                         .map(|c| c.as_str().to_string()),
                     tier_id: page.tier_id.clone(),
                     included: page.included,
+                    blank: page.blank,
                 })
                 .collect(),
         })

@@ -54,6 +54,9 @@ pub struct WatchedPage {
     pub coverage: Coverage,
     pub tier_id: Option<String>,
     pub included: bool,
+    /// No ink at all after the intensity rule. A blank sheet is never charged
+    /// (`blank_page_free`) and never printed: it is excluded by default.
+    pub blank: bool,
     pub thumbnail_png: Vec<u8>,
     /// Area measurement, when the analyzer produced one. `AREA` ladders bill
     /// on it, so it must survive all the way to the draft sent to MyPaper.
@@ -1051,12 +1054,16 @@ impl AgentCore {
                     &pricing,
                 )
                 .map(|t| t.id.clone());
+                let blank = pricing.is_blank(pricing.apply_intensity(p.coverage));
                 WatchedPage {
                     area,
                     page_no: p.page_no,
                     coverage: p.coverage,
                     tier_id,
-                    included: true,
+                    // A blank sheet costs nothing and prints nothing, so it
+                    // starts excluded; the operator can still force it back in.
+                    included: !(blank && pricing.blank_page_free),
+                    blank,
                     thumbnail_png: p.thumbnail_png,
                 }
             })
@@ -1672,6 +1679,7 @@ mod tests {
                     coverage: Coverage::new(80.0, 80.0, 0.0, 0.0),
                     tier_id: Some("t10".into()),
                     included: true,
+                    blank: false,
                     thumbnail_png: Vec::new(),
                 },
                 WatchedPage {
@@ -1680,6 +1688,7 @@ mod tests {
                     coverage: Coverage::new(0.0, 0.0, 0.0, 3.0),
                     tier_id: Some("t6".into()),
                     included: false,
+                    blank: false,
                     thumbnail_png: Vec::new(),
                 },
             ],
@@ -1711,6 +1720,7 @@ mod tests {
                     coverage: Coverage::new(80.0, 80.0, 0.0, 0.0),
                     tier_id: Some("t10".into()),
                     included: true,
+                    blank: false,
                     thumbnail_png: Vec::new(),
                 },
                 WatchedPage {
@@ -1719,6 +1729,7 @@ mod tests {
                     coverage: Coverage::new(0.0, 0.0, 0.0, 3.0),
                     tier_id: Some("t6".into()),
                     included: false,
+                    blank: false,
                     thumbnail_png: Vec::new(),
                 },
             ],

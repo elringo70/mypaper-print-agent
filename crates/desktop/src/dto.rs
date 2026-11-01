@@ -91,6 +91,8 @@ pub struct PageDto {
     // Page previews are fetched separately (`page_thumbnail`): shipping every
     // thumbnail here turned each poll into megabytes of base64.
     pub included: bool,
+    /// Sheet carries no ink: not charged and not printed.
+    pub blank: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

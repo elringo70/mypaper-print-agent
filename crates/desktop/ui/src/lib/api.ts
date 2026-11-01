@@ -10,6 +10,8 @@ export interface PageDto {
 	class: string | null;
 	tierId: string | null;
 	included: boolean;
+	/** No ink at all: not charged and not printed. */
+	blank: boolean;
 }
 
 export interface JobDto {
