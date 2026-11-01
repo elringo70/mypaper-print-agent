@@ -115,6 +115,9 @@ fn main() {
         .ok()
         .and_then(|p| p.parent().map(|d| d.join("ipp-inbox")))
         .unwrap_or_else(std::env::temp_dir);
+    // A captured PDF only lives while its job is pending; anything older than a
+    // week belongs to an abandoned job and would sit there forever.
+    mpa_agent::pilot::prune_inbox(&inbox, std::time::Duration::from_secs(7 * 24 * 3600));
     match std::net::TcpListener::bind(("127.0.0.1", mpa_ipp::DEFAULT_PORT)) {
         Ok(listener) => {
             // Price for the pilot journal. A failure (unpaired, offline) leaves

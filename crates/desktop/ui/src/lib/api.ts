@@ -12,6 +12,8 @@ export interface PageDto {
 	included: boolean;
 	/** No ink at all: not charged and not printed. */
 	blank: boolean;
+	/** Coverage the tariff ladder bills under the job's mode. */
+	billingCoverage: number;
 }
 
 export interface JobDto {
@@ -27,6 +29,8 @@ export interface JobDto {
 	targetTicketId: string | null;
 	preset: string | null;
 	printMode: 'Bw' | 'Color';
+	/** Metric deciding the tariff: K_ONLY | SUM_CMYK | MAX_CHANNEL | AREA. */
+	metric: string;
 	price: number | null;
 }
 

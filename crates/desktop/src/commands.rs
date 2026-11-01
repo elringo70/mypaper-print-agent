@@ -69,6 +69,7 @@ pub fn snapshot(state: State<'_, AppState>) -> Result<AppSnapshot, String> {
             },
             preset: job.preset.clone(),
             print_mode: format!("{:?}", job.print_mode),
+            metric: core.metric_name(job.print_mode).to_string(),
             price: None,
             pages: job
                 .pages
@@ -87,6 +88,7 @@ pub fn snapshot(state: State<'_, AppState>) -> Result<AppSnapshot, String> {
                     tier_id: page.tier_id.clone(),
                     included: page.included,
                     blank: page.blank,
+                    billing_coverage: core.billing_coverage(page, job.print_mode),
                 })
                 .collect(),
         })

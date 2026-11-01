@@ -242,6 +242,22 @@
 		return job.pages.filter((p) => p.included).length;
 	}
 
+	/** Name of the billing metric, so the percentage is not ambiguous. */
+	function metricLabel(metric: string) {
+		switch (metric) {
+			case 'K_ONLY':
+				return 'cobertura de negro';
+			case 'SUM_CMYK':
+				return 'suma CMYK';
+			case 'MAX_CHANNEL':
+				return 'canal de color más alto';
+			case 'AREA':
+				return 'superficie impresa';
+			default:
+				return metric;
+		}
+	}
+
 	function classLabel(cls: string | null) {
 		switch (cls) {
 			case 'color':
@@ -379,7 +395,10 @@
 
 				<div class="columns">
 					<div class="tariff">
-						<h3>Detalles de tarifación</h3>
+						<h3>
+							Detalles de tarifación
+							<span class="small muted">· {metricLabel(current.metric)}</span>
+						</h3>
 						<table>
 							<thead>
 								<tr><th>Pág.</th><th>Tarifa</th><th>Costo</th></tr>
@@ -403,9 +422,14 @@
 												<span class="small muted">no se imprime</span>
 											{:else}
 												<span class="chip">{classLabel(page.class)}</span>
-												<span class="small muted">
-													{page.areaPct !== null ? `${page.areaPct.toFixed(1)}%` : '—'}
+												<span class="small muted" title="Cobertura que decide la tarifa">
+													{page.billingCoverage.toFixed(1)}%
 												</span>
+												{#if page.areaPct !== null}
+													<span class="small muted" title="Superficie de la hoja con tinta">
+														área {page.areaPct.toFixed(1)}%
+													</span>
+												{/if}
 											{/if}
 										</td>
 										<td class="cost">{money(pagePrice(page.pageNo))}</td>

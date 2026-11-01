@@ -59,6 +59,38 @@ pub fn journal_path(dir: &Path) -> PathBuf {
     dir.join("pilot.jsonl")
 }
 
+/// Deletes capture files older than `max_age` from the inbox.
+///
+/// The agent keeps a captured PDF only while its job is pending: completing or
+/// cancelling removes it. A job the operator abandons would otherwise pin the
+/// document forever, so the folder is pruned at startup. The pilot journal
+/// (`pilot.jsonl`) is never touched — it is the audit trail, and it has no PDF.
+pub fn prune_inbox(dir: &Path, max_age: std::time::Duration) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let journal = journal_path(dir);
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path == journal || !path.is_file() {
+            continue;
+        }
+        let old = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .map(|modified| modified.elapsed().map(|age| age > max_age).unwrap_or(false))
+            .unwrap_or(false);
+        if old && std::fs::remove_file(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    if removed > 0 {
+        crate::log::info(format!("inbox: {removed} capturas viejas borradas"));
+    }
+    removed
+}
+
 /// Append one entry. Best effort: a pilot that cannot write must not stop the
 /// printer the customer is waiting for.
 pub fn append(dir: &Path, entry: &PilotEntry) -> std::io::Result<()> {

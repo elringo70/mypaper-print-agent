@@ -503,6 +503,27 @@ impl AgentCore {
     }
 
     /// Billing metric per mode (synced from MyPaper).
+    /// Coverage that decides this page's tariff under `mode`: the mode's metric
+    /// over the intensity-trimmed ink. The window shows THIS number, not the
+    /// sheet area — the area says how much of the paper carries ink, which is a
+    /// different question and a different ladder (`AREA`).
+    pub fn billing_coverage(&self, page: &WatchedPage, mode: PrintMode) -> f32 {
+        let inked = self.pricing.apply_intensity(page.coverage);
+        let metric = match mode {
+            PrintMode::Bw => self.metrics.bw,
+            PrintMode::Color => self.metrics.color,
+        };
+        mpa_domain::metric_coverage_with_area(metric, &inked, page.area.map(|a| a.area_pct))
+    }
+
+    /// Name of the metric in force for `mode`, for the window's header.
+    pub fn metric_name(&self, mode: PrintMode) -> &'static str {
+        match mode {
+            PrintMode::Bw => self.metrics.bw.name(),
+            PrintMode::Color => self.metrics.color.name(),
+        }
+    }
+
     pub fn metrics(&self) -> mpa_domain::MetricsByMode {
         self.metrics
     }

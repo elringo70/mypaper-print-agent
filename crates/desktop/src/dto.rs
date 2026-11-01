@@ -73,6 +73,8 @@ pub struct JobDto {
     pub preset: Option<String>,
     /// "Bw" | "Color"
     pub print_mode: String,
+    /// Metric that decides the tariff in this mode ("K_ONLY", "SUM_CMYK", ...).
+    pub metric: String,
     pub price: Option<f32>,
 }
 
@@ -93,6 +95,8 @@ pub struct PageDto {
     pub included: bool,
     /// Sheet carries no ink: not charged and not printed.
     pub blank: bool,
+    /// Coverage the ladder bills under the job's mode (the number to show).
+    pub billing_coverage: f32,
 }
 
 #[derive(Debug, Clone, Serialize)]

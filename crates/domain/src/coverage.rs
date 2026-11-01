@@ -51,6 +51,18 @@ pub enum PrintMetric {
     Area,
 }
 
+impl PrintMetric {
+    /// Wire name, same string the webapp stores in `print_settings`.
+    pub fn name(self) -> &'static str {
+        match self {
+            PrintMetric::KOnly => "K_ONLY",
+            PrintMetric::SumCmyk => "SUM_CMYK",
+            PrintMetric::MaxChannel => "MAX_CHANNEL",
+            PrintMetric::Area => "AREA",
+        }
+    }
+}
+
 /// Metric in use per mode, as configured in MyPaper (`print_settings`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
