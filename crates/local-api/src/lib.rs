@@ -341,7 +341,10 @@ fn handshake(shared: &Shared, request: &Request) -> Result<(u16, String), RouteE
 
     let pairing =
         mpa_sync::PairingStore::load(None).map_err(|_| err(401, "el agente no está enlazado"))?;
-    let client = mpa_sync::SyncClient::new(&pairing.server_url, Some(pairing.agent_key))
+    // `connect` negotiates the contract base: a server that has not been updated
+    // yet answers 404 on the versioned path and the client falls back to the
+    // legacy one instead of failing the handshake with a 502.
+    let client = mpa_sync::connect(&pairing.server_url, Some(pairing.agent_key))
         .map_err(|_| err(502, "enlace no disponible"))?;
     match client.local_grant(&code) {
         Ok(true) => {}
