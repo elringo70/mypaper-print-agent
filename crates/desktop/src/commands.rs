@@ -188,8 +188,14 @@ pub fn cancel_job(state: State<'_, AppState>, printer: String, job_id: u32) -> R
 ///
 /// The price always comes from the server: a local guess would drift from what
 /// the ticket charges, and the operator reads this number to decide.
-#[tauri::command(async)]
-pub fn quote(
+///
+/// `async` + `spawn_blocking` on purpose: `reqwest::blocking` owns its own
+/// tokio runtime, and dropping it on a runtime worker panics with "Cannot drop
+/// a runtime in a context where blocking is not allowed". A plain
+/// `#[tauri::command(async)]` runs the body on that worker, so the HTTP round
+/// trip — and the client's drop — belong on the blocking pool.
+#[tauri::command]
+pub async fn quote(
     state: State<'_, AppState>,
     printer: String,
     job_id: u32,
@@ -201,9 +207,16 @@ pub fn quote(
             .ok_or_else(|| "trabajo no encontrado".to_string())?
     };
 
+    tauri::async_runtime::spawn_blocking(move || quote_pages(pages))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Blocking half of [`quote`], kept separate so the runtime boundary is obvious.
+fn quote_pages(pages: Vec<mpa_agent::WatchedPage>) -> Result<crate::dto::QuoteDto, String> {
     let pairing = mpa_sync::PairingStore::load(None).map_err(|e| e.to_string())?;
     let client = mpa_sync::connect(&pairing.server_url, Some(pairing.agent_key))
-        .map_err(|e| e.to_string())?;
+        .map_err(quote_error)?;
     let request: Vec<mpa_sync::QuotePage> = pages
         .iter()
         .map(|p| mpa_sync::QuotePage {
@@ -215,11 +228,38 @@ pub fn quote(
             include: p.included,
         })
         .collect();
-    let quote = client.quote(&request).map_err(|e| e.to_string())?;
+    let quote = client.quote(&request).map_err(quote_error)?;
     Ok(crate::dto::QuoteDto {
         bw: mode_quote(quote.for_mode(mpa_domain::PrintMode::Bw)),
         color: mode_quote(quote.for_mode(mpa_domain::PrintMode::Color)),
     })
+}
+
+/// Turns a server rejection into something the operator can act on.
+///
+/// A failed quote answers `400` with `{"errors":{"_form":["..."]}}` — the reason
+/// matters ("la página 3 no cae en ningún nivel"), so it is unwrapped instead of
+/// showing the raw JSON next to the price.
+fn quote_error(e: mpa_sync::SyncError) -> String {
+    if let mpa_sync::SyncError::Status(code, body) = &e {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
+            let message = json
+                .get("errors")
+                .and_then(|errors| errors.as_object())
+                .and_then(|fields| {
+                    fields
+                        .values()
+                        .find_map(|value| value.as_array())
+                        .and_then(|list| list.first())
+                        .and_then(|value| value.as_str())
+                });
+            if let Some(message) = message {
+                return message.to_string();
+            }
+        }
+        return format!("el servidor respondió {code}");
+    }
+    e.to_string()
 }
 
 fn mode_quote(mode: &mpa_sync::QuoteMode) -> crate::dto::ModeQuoteDto {
