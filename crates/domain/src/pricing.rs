@@ -120,46 +120,27 @@ pub fn is_grey_ink(page: Coverage) -> bool {
     max - min <= GREY_TOLERANCE
 }
 
-/// Rule set a page would be billed by, mirroring the server: the Fase 6 rules
-/// first, then both rule sets, and the DEAREST one wins (ties go to COLOR).
-/// `price_of` returns the tier's price when it is known; without prices there is
-/// nothing to compare and COLOR keeps its precedence.
-pub fn dearest_tier<'a>(
+/// Tier that bills a page under `mode`, mirroring the server.
+///
+/// The printer mode decides the ladder: a papelería keeps a cheap mono printer
+/// and a dear color one, so a page sent to the color printer bills at color
+/// prices even when the sheet carries black ink only. The two ladders never
+/// compete, so there is no price comparison here.
+pub fn tier_for_mode<'a>(
     page: &Coverage,
     area_pct: Option<f32>,
     tiers: &'a [crate::coverage::Tier],
+    mode: PrintMode,
     metrics: MetricsByMode,
     pricing: &PrintPricing,
-    price_of: impl Fn(&str) -> Option<f32>,
 ) -> Option<&'a crate::coverage::Tier> {
     let inked = pricing.apply_intensity(*page);
-    let bw = classify_coverage(
-        crate::coverage::metric_coverage_with_area(metrics.bw, &inked, area_pct),
-        tiers,
-        PrintMode::Bw,
-    );
-    let color = if pricing.has_color_ink(inked) {
-        classify_coverage(
-            crate::coverage::metric_coverage_with_area(metrics.color, &inked, area_pct),
-            tiers,
-            PrintMode::Color,
-        )
-    } else {
-        None
+    let metric = match mode {
+        PrintMode::Bw => metrics.bw,
+        PrintMode::Color => metrics.color,
     };
-    match (bw, color) {
-        (Some(bw), Some(color)) => {
-            match (price_of(&bw.id), price_of(&color.id)) {
-                // Only a strictly dearer mono tier takes the page away from
-                // color, so an unknown price never flips the historical label.
-                (Some(bw_price), Some(color_price)) if bw_price > color_price => Some(bw),
-                _ => Some(color),
-            }
-        }
-        (Some(bw), None) => Some(bw),
-        (None, Some(color)) => Some(color),
-        (None, None) => None,
-    }
+    let coverage = crate::coverage::metric_coverage_with_area(metric, &inked, area_pct);
+    classify_coverage(coverage, tiers, mode)
 }
 
 /// Coverage of a page under a rule set, after the intensity rule. The agent uses
@@ -309,98 +290,60 @@ mod tests {
     }
 
     #[test]
-    fn the_dearest_rule_set_takes_the_page() {
+    fn the_printer_mode_decides_the_ladder() {
         let tiers = vec![
             tier("bw", PrintMode::Bw, 0.0, 100.0),
             tier("color", PrintMode::Color, 0.0, 100.0),
         ];
         let metrics = MetricsByMode::default();
         let rules = PrintPricing::default();
-        // A page with color ink: both sets match, so the price decides.
+
+        // Black-only page on the color printer: it still bills color. That is
+        // the whole point of keeping two printers: the sheet costs color money.
+        let mono_page = page(0.0, 0.0, 0.0, 40.0);
+        let on_color = tier_for_mode(&mono_page, None, &tiers, PrintMode::Color, metrics, &rules)
+            .unwrap();
+        assert_eq!(on_color.id, "color");
+
+        let on_mono = tier_for_mode(&mono_page, None, &tiers, PrintMode::Bw, metrics, &rules)
+            .unwrap();
+        assert_eq!(on_mono.id, "bw");
+
+        // A color page never falls back to the mono ladder.
         let colorful = page(30.0, 5.0, 0.0, 10.0);
-        let cheap_color = dearest_tier(&colorful, None, &tiers, metrics, &rules, |id| {
-            Some(if id == "color" { 2.0 } else { 6.0 })
-        })
-        .unwrap();
-        assert_eq!(cheap_color.id, "bw");
-
-        let dear_color = dearest_tier(&colorful, None, &tiers, metrics, &rules, |id| {
-            Some(if id == "color" { 6.0 } else { 2.0 })
-        })
-        .unwrap();
-        assert_eq!(dear_color.id, "color");
-
-        // Tie → COLOR (same rule as the server).
-        let tie = dearest_tier(&colorful, None, &tiers, metrics, &rules, |_| Some(4.0)).unwrap();
-        assert_eq!(tie.id, "color");
-
-        // Unknown prices: nothing to compare, color keeps precedence.
-        let unknown = dearest_tier(&colorful, None, &tiers, metrics, &rules, |_| None).unwrap();
-        assert_eq!(unknown.id, "color");
-
-        // A black-only page never reaches the color set.
-        let mono = dearest_tier(
-            &page(0.0, 0.0, 0.0, 40.0),
-            None,
-            &tiers,
-            metrics,
-            &rules,
-            |_| Some(1.0),
-        )
-        .unwrap();
-        assert_eq!(mono.id, "bw");
+        let color_page = tier_for_mode(&colorful, None, &tiers, PrintMode::Color, metrics, &rules)
+            .unwrap();
+        assert_eq!(color_page.id, "color");
     }
 
     #[test]
-    fn the_rules_decide_the_label_before_the_prices() {
-        // Grey page with greys_as_color off: the color set is not even a
-        // candidate, so the dearest-price comparison never happens.
-        let tiers = vec![
-            tier("bw", PrintMode::Bw, 0.0, 100.0),
-            tier("color", PrintMode::Color, 0.0, 100.0),
-        ];
-        let rules = PrintPricing {
-            greys_as_color: false,
-            ..Default::default()
-        };
-        let labelled = dearest_tier(
-            &page(20.0, 20.0, 20.0, 0.0),
-            None,
-            &tiers,
-            MetricsByMode::default(),
-            &rules,
-            |id| Some(if id == "color" { 99.0 } else { 1.0 }),
-        )
-        .unwrap();
-        assert_eq!(labelled.id, "bw");
-
-        // With the intensity rule the page is blank. It still MATCHES the 0–100
-        // range (coverage 0 is inside it): "free blank sheet" is the server's
-        // `blank_page_free` rule, not a missing tier. A range that starts above
-        // 0 is what leaves a blank page unlabelled.
+    fn the_fase_6_rules_trim_the_ink_before_the_ladder() {
+        let tiers = vec![tier("color", PrintMode::Color, 0.0, 20.0)];
+        // Intensity 25%: a light page is billed as if blank, i.e. the first band.
         let strict = PrintPricing {
             intensity_threshold: 25.0,
             ..Default::default()
         };
-        let blank = dearest_tier(
+        let labelled = tier_for_mode(
             &page(20.0, 20.0, 20.0, 0.0),
             None,
             &tiers,
+            PrintMode::Color,
             MetricsByMode::default(),
             &strict,
-            |_| Some(1.0),
         )
         .unwrap();
-        assert_eq!(blank.id, "bw");
+        assert_eq!(labelled.id, "color");
 
-        let above_zero = vec![tier("bw", PrintMode::Bw, 0.01, 100.0)];
-        assert!(dearest_tier(
+        // No tier in the mode means no label: the server reports "unpriced".
+        let above_zero = vec![tier("color", PrintMode::Color, 0.01, 100.0)];
+        assert!(tier_for_mode(
             &page(20.0, 20.0, 20.0, 0.0),
             None,
             &above_zero,
+            PrintMode::Color,
             MetricsByMode::default(),
             &strict,
-            |_| Some(1.0)
         )
         .is_none());
     }

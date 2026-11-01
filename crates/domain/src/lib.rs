@@ -12,7 +12,7 @@ pub use coverage::{
 pub use options::{PrintOptions, PrintPreset};
 pub use policy::{PolicyMode, PrinterPolicy, PrinterRoles};
 pub use pricing::{
-    dearest_tier, is_grey_ink, priced_coverage, PrintPricing, VolumeDiscount, GREY_TOLERANCE,
+    tier_for_mode, is_grey_ink, priced_coverage, PrintPricing, VolumeDiscount, GREY_TOLERANCE,
 };
 pub use release::{ManifestError, ReleaseManifest, UpdateStatus};
 pub use state::{transition, JobEvent, JobState, TransitionError};

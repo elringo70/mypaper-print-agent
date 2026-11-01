@@ -576,9 +576,33 @@ impl AgentCore {
         job_id: u32,
         mode: PrintMode,
     ) -> Result<(), AgentError> {
-        let job = self.job_mut(printer, job_id)?;
-        if job.print_mode != mode {
-            job.print_mode = mode;
+        let tiers = self.tiers.clone();
+        let metrics = self.metrics;
+        let pricing = self.pricing.clone();
+        let changed = {
+            let job = self.job_mut(printer, job_id)?;
+            if job.print_mode == mode {
+                false
+            } else {
+                job.print_mode = mode;
+                // Relabel: the same sheet bills the mono ladder on the mono
+                // printer and the color ladder on the color one.
+                for page in job.pages.iter_mut() {
+                    let area_pct = page.area.map(|a| a.area_pct);
+                    page.tier_id = mpa_domain::tier_for_mode(
+                        &page.coverage,
+                        area_pct,
+                        &tiers,
+                        mode,
+                        metrics,
+                        &pricing,
+                    )
+                    .map(|t| t.id.clone());
+                }
+                true
+            }
+        };
+        if changed {
             self.bump();
         }
         Ok(())
@@ -1001,9 +1025,8 @@ impl AgentCore {
         let tiers = self.tiers.clone();
         let metrics = self.metrics;
         let pricing = self.pricing.clone();
-        // Cloned up front: the labeling runs while `job_mut` borrows self.
-        let prices = self.tier_prices.clone();
         let job = self.job_mut(printer, job_id)?;
+        let job_mode = job.print_mode;
         job.analysis_error = None;
         job.format = Some(analyzed.format);
         job.spool_path = analyzed.spool_path;
@@ -1019,13 +1042,13 @@ impl AgentCore {
                     class: Some(m.class),
                 });
                 let area_pct = area.map(|a| a.area_pct);
-                let tier_id = mpa_domain::dearest_tier(
+                let tier_id = mpa_domain::tier_for_mode(
                     &p.coverage,
                     area_pct,
                     &tiers,
+                    job_mode,
                     metrics,
                     &pricing,
-                    |tier_id| prices.get(tier_id).copied(),
                 )
                 .map(|t| t.id.clone());
                 WatchedPage {
